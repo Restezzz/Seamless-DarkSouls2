@@ -12,6 +12,9 @@ mod/tools/ui_preview/build/
 *.user
 *.suo
 
+# Release archives made by scripts/package.ps1 (they go to the GitHub release)
+dist/
+
 # Symbols of each built DLL, kept locally to read crash logs (symbols/<md5>/)
 symbols/
 

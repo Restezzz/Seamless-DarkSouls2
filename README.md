@@ -5,6 +5,7 @@ A pathetic attempt at LukeYui imitation
 
 <p align="center">
 <b>Seamless Co-op for Dark Souls II: Scholar of the First Sin</b> · version <b>0.1.0</b><br>
+<a href="https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest"><b>Download / Скачать</b></a><br>
 English on the left · Русский справа
 </p>
 
@@ -121,16 +122,18 @@ no invasions, no strangers.
 - **Windows 10 or 11.**
 - **[Radmin VPN](https://www.radmin-vpn.com/)** (free) on every PC, everybody in the same
   Radmin network. Hamachi works too.
-- This mod. The host takes the files from `release/host`, friends from `release/joiner`.
+- This mod: one archive for the host, one for friends (below).
 
 ## Download
 
-Open **[Tags](https://github.com/Restezzz/Seamless-DarkSouls2/tags)**, pick a version and
-download **Source code (zip)**. The archive has everything; the ready-to-use files are in
-`release/host` and `release/joiner`.
+Open the **[latest release](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
+and take one archive:
 
-Version 0.1.0 directly:
-[Seamless-DarkSouls2-0.1.0.zip](https://github.com/Restezzz/Seamless-DarkSouls2/archive/refs/tags/v0.1.0.zip)
+- **the host** (the player friends join): `Seamless-DS2-0.1.0-host.zip`
+- **friends**: `Seamless-DS2-0.1.0-joiner.zip`
+
+Older versions are on the [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases)
+page.
 
 </td>
 <td valign="top">
@@ -141,16 +144,17 @@ Version 0.1.0 directly:
 - **Windows 10 или 11.**
 - **[Radmin VPN](https://www.radmin-vpn.com/ru/)** (бесплатный) на каждом компьютере, все в
   одной сети Radmin. Hamachi тоже подойдёт.
-- Этот мод. Хосту — файлы из `release/host`, друзьям — из `release/joiner`.
+- Этот мод: один архив для хоста, другой для друзей (ниже).
 
 ## Скачать
 
-Открой **[Tags](https://github.com/Restezzz/Seamless-DarkSouls2/tags)**, выбери версию и
-скачай **Source code (zip)**. В архиве всё; готовые файлы лежат в `release/host` и
-`release/joiner`.
+Открой **[последний релиз](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
+и возьми один архив:
 
-Версия 0.1.0 напрямую:
-[Seamless-DarkSouls2-0.1.0.zip](https://github.com/Restezzz/Seamless-DarkSouls2/archive/refs/tags/v0.1.0.zip)
+- **хосту** (к нему подключаются друзья): `Seamless-DS2-0.1.0-host.zip`
+- **друзьям**: `Seamless-DS2-0.1.0-joiner.zip`
+
+Прошлые версии — на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases).
 
 </td>
 </tr>
@@ -165,7 +169,7 @@ Version 0.1.0 directly:
 2. Open the game folder: Steam → right-click Dark Souls II → **Manage → Browse local files**.
    It's `...\steamapps\common\Dark Souls II Scholar of the First Sin\Game\`, the folder with
    `DarkSoulsII.exe`.
-3. Copy **everything from `release/host`** into it (replace `dinput8.dll` if asked).
+3. Extract **`Seamless-DS2-0.1.0-host.zip`** into it (replace `dinput8.dll` if asked).
 4. Run **`StartServer.bat`**. The first time Windows may ask about the firewall — allow it.
    The window shows **your address for friends** (26.x.x.x) and where the key file
    `ds2_server_public.key` is (in the game folder).
@@ -181,7 +185,7 @@ Version 0.1.0 directly:
 2. Открой папку игры: Steam → правый клик по Dark Souls II → **Управление → Просмотреть
    локальные файлы**. Это `...\steamapps\common\Dark Souls II Scholar of the First Sin\Game\`,
    там лежит `DarkSoulsII.exe`.
-3. Скопируй туда **всё из `release/host`** (если спросит — заменить `dinput8.dll`).
+3. Распакуй туда **`Seamless-DS2-0.1.0-host.zip`** (если спросит — заменить `dinput8.dll`).
 4. Запусти **`StartServer.bat`**. В первый раз Windows может спросить про брандмауэр —
    разреши. Окно покажет **адрес для друзей** (26.x.x.x) и где лежит файл-ключ
    `ds2_server_public.key` (в папке игры).
@@ -196,7 +200,7 @@ Version 0.1.0 directly:
 ## Friend: setting up (once)
 
 1. Install Radmin VPN and join the host's network (**Network → Join network**).
-2. Copy **everything from `release/joiner`** into your game folder (same place as above).
+2. Extract **`Seamless-DS2-0.1.0-joiner.zip`** into your game folder (same place as above).
 3. Put the host's **`ds2_server_public.key`** into the same folder.
 4. Open **`ds2_seamless_coop.ini`** in Notepad and write the host's address after
    `server_ip=`, for example `server_ip=26.12.34.56`. Save.
@@ -207,7 +211,7 @@ Version 0.1.0 directly:
 ## Друг: настройка (один раз)
 
 1. Поставь Radmin VPN и войди в сеть хоста (**Сеть → Присоединиться к сети**).
-2. Скопируй **всё из `release/joiner`** в свою папку игры (туда же, что и выше).
+2. Распакуй **`Seamless-DS2-0.1.0-joiner.zip`** в свою папку игры (туда же, что и выше).
 3. Положи в ту же папку **`ds2_server_public.key`** от хоста.
 4. Открой **`ds2_seamless_coop.ini`** Блокнотом и впиши адрес хоста после `server_ip=`,
    например `server_ip=26.12.34.56`. Сохрани.
@@ -385,8 +389,9 @@ the menu key are easier to change in the menu itself.
 
 | Folder | What |
 |---|---|
-| `release/host` | ready files for the host: the mod, the server, the start and stop scripts |
-| `release/joiner` | ready files for friends |
+| `release/host` | what the host's archive is made of: the mod, the server, the start and stop scripts |
+| `release/joiner` | what the friends' archive is made of |
+| `scripts` | `package.ps1` builds the two archives |
 | `mod` | source code of the mod (`dinput8.dll`) |
 | `server` | the patch for the ds3os server and how to build it |
 | `docs` | research notes on the game's internals (Russian) and screenshots |
@@ -410,8 +415,9 @@ The mod ends up in `mod/build/bin/Release/dinput8.dll`. The server: see
 
 | Папка | Что там |
 |---|---|
-| `release/host` | готовые файлы для хоста: мод, сервер, скрипты запуска и остановки |
-| `release/joiner` | готовые файлы для друзей |
+| `release/host` | из чего собирается архив хоста: мод, сервер, скрипты запуска и остановки |
+| `release/joiner` | из чего собирается архив друзей |
+| `scripts` | `package.ps1` собирает оба архива |
 | `mod` | исходники мода (`dinput8.dll`) |
 | `server` | патч к серверу ds3os и как его собрать |
 | `docs` | заметки об устройстве игры и скриншоты |

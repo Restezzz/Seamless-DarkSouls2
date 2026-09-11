@@ -1,10 +1,10 @@
 # Changelog / История версий
 
-Versions are tagged in git (`v0.1.0`, ...). Each tag can be downloaded as an archive from the
-[Tags](https://github.com/Restezzz/Seamless-DarkSouls2/tags) page.
+Every version is on the [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) page with two
+archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<version>-joiner.zip` for friends.
 
-Каждая версия — тег в git (`v0.1.0`, ...). Архив любой версии скачивается со страницы
-[Tags](https://github.com/Restezzz/Seamless-DarkSouls2/tags).
+Каждая версия лежит на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) двумя
+архивами: `Seamless-DS2-<версия>-host.zip` для хоста и `Seamless-DS2-<версия>-joiner.zip` для друзей.
 
 ## 0.1.0 — 2026-09-12
 
