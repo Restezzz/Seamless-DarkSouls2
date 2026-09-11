@@ -107,10 +107,39 @@ void PeerManager::Shutdown() {
     m_initialized = false;
 }
 
+// Whatever reached the port while no session was up belongs to an old one: the
+// socket is only read inside a session, so it waits there. The Disconnect a
+// host sent when it closed its previous lobby turned the next join down as
+// "wrong password" (12.09 03:01:06). It is thrown away before a session starts.
+// Every read of the socket takes this: the network thread drains it in
+// HandleIncomingPackets, and a lobby created or joined from the menu (the
+// render thread) throws old packets away here.
+static std::mutex g_socketReadMutex;
+
+static void DiscardPendingPackets(SOCKET sock) {
+    std::lock_guard<std::mutex> lock(g_socketReadMutex);
+    constexpr int kMaxDrain = 4096;   // a flood cannot keep us here
+    char buffer[2048];
+    int dropped = 0;
+    for (int i = 0; i < kMaxDrain; ++i) {
+        sockaddr_in from{};
+        int fromLen = sizeof(from);
+        const int got = recvfrom(sock, buffer, sizeof(buffer), 0, reinterpret_cast<sockaddr*>(&from), &fromLen);
+        if (got != SOCKET_ERROR) {
+            ++dropped;
+            continue;
+        }
+        const int error = WSAGetLastError();
+        if (error != WSAEMSGSIZE && error != WSAECONNRESET) break;   // WSAEWOULDBLOCK: nothing left
+    }
+    if (dropped) LOG_INFO("Dropped %d packet(s) left over from before this session", dropped);
+}
+
 bool PeerManager::CreateSession(const std::string& password) {
     if (!m_initialized) return false;
 
     LOG_INFO("Creating session with password...");
+    DiscardPendingPackets(reinterpret_cast<SOCKET>(m_socket));
 
     m_isHost = true;
     m_connected = true;
@@ -124,6 +153,7 @@ bool PeerManager::JoinSession(const std::string& address, uint16_t port, const s
     if (!m_initialized) return false;
 
     LOG_INFO("Joining session at %s:%u...", address.c_str(), port);
+    DiscardPendingPackets(reinterpret_cast<SOCKET>(m_socket));
 
     m_sessionPassword = password;
 
@@ -292,7 +322,10 @@ void PeerManager::HandleIncomingPackets() {
     };
     std::vector<ReceivedPacket> packets;
 
-    // Drain the socket (no lock needed — socket is only read here)
+    // Drain the socket under the read lock: a lobby created or joined from the
+    // menu drains it too (DiscardPendingPackets). The lock is let go before the
+    // packets are handled.
+    std::unique_lock<std::mutex> readLock(g_socketReadMutex);
     while (true) {
         ReceivedPacket pkt{};
         int senderLen = sizeof(pkt.sender);
@@ -301,6 +334,12 @@ void PeerManager::HandleIncomingPackets() {
 
         if (pkt.size == SOCKET_ERROR) {
             int error = WSAGetLastError();
+            // A port that answered "unreachable" to one of our sends (the other
+            // game closed) or an oversized datagram: that one is used up, the
+            // rest are still there. These made 13,000 "Socket error: 10054"
+            // lines in one log and held the other packets back until the next
+            // update.
+            if (error == WSAECONNRESET || error == WSAEMSGSIZE) continue;
             if (error != WSAEWOULDBLOCK) {
                 LOG_ERROR("Socket error: %d", error);
             }
@@ -314,6 +353,7 @@ void PeerManager::HandleIncomingPackets() {
             }
         }
     }
+    readLock.unlock();
 
     // Process each packet
     for (auto& pkt : packets) {

@@ -57,7 +57,12 @@ void ArmSummonAccept();
 // The game declines every summon right now: at a bonfire, in a menu, in an
 // event (the multiplayer manager's busy counter). No sign goes down meanwhile.
 bool IsSummonBusy();
-void WarnBusyForSign();         // tells the player to get up from the bonfire
+void WarnBusyForSign();         // tells the player the game is busy (bonfire, menu, event)
+// Around the mod's own call of the game's sign creation (player_sync.cpp):
+// where the game finds no spot for a sign the player's own spot is used, and a
+// live-sign flag a failed create left behind is taken down first.
+void SetModSignPlacement(bool on);
+bool ClearStaleLiveSign(void* signManager);
 // Game thread: a summon declined while busy is followed by a fresh sign once free.
 void SummonAcceptGameTick();
 
@@ -75,8 +80,13 @@ void FreeTravelGameTick();   // writes the requested bytes, on the game thread o
 // at the last bonfire rested at there (or the one nearest to where it arrived);
 // in a boss fight the return waits until the fight is decided or both are dead.
 bool InstallDeathSync(bool enabled);
+// A guest can talk to NPCs in the host's world: the talk prompt turns every
+// phantom down, and is answered "yes" for the local guest (npc_talk.cpp).
+bool InstallNpcTalk();
 void DeathSyncGameTick();             // game thread, every frame
 void NotePartnerLife(bool alive);     // the partner's own PlayerDeath / PlayerRespawn
+void NotePartnerBoss(int32_t active, int32_t phase);   // the host's boss fight (BossState)
+bool IsHostInBossFight();             // a recent BossState from the host says a fight is on
 void CancelDeathRejoin();             // leaving on purpose: no automatic return
 // Put a sign down again for the host to summon, without the once-per-handshake
 // limit of the automatic join (player_sync.cpp).

@@ -11,6 +11,7 @@
 #include "../../include/hooks.h"
 #include "../../include/sync.h"
 #include "../../include/session.h"
+#include "../../include/network.h"
 #include "../../include/utils.h"
 #include "MinHook.h"
 
@@ -30,10 +31,10 @@ static void __fastcall PlayerDeathHook(void* playerPtr) {
 
     // Notify session manager
     auto& sessionMgr = DS2Coop::Session::SessionManager::GetInstance();
-    auto* localPlayer = sessionMgr.GetLocalPlayer();
-    if (localPlayer) {
-        sessionMgr.NotifyPlayerDeath(localPlayer->playerId);
-    }
+    // By id, not through GetLocalPlayer(): that hands out a pointer into the
+    // player list the network thread changes. NotifyPlayerDeath looks the id up
+    // under the lock and does nothing outside a session.
+    sessionMgr.NotifyPlayerDeath(DS2Coop::Network::PeerManager::GetInstance().GetLocalPlayerId());
 
     // Call original - let the death happen
     g_originalPlayerDeath(playerPtr);

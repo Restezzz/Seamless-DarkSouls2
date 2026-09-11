@@ -6,6 +6,49 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 Каждая версия лежит на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) двумя
 архивами: `Seamless-DS2-<версия>-host.zip` для хоста и `Seamless-DS2-<версия>-joiner.zip` для друзей.
 
+## 0.1.1 — 2026-09-12
+
+What two players found in 0.1.0.
+Что нашли в 0.1.0 два игрока.
+
+**Fixed / Исправлено**
+
+- Joining from Majula and other areas without multiplayer. The game held multiplayer "busy" there and turned
+  every summon down; after a save loaded straight into Majula it also found no spot for the sign at all. Both are
+  worked around while the co-op lobby is up.
+  Вход из Маджулы и других областей без мультиплеера. Игра держала там мультиплеер «занятым» и отклоняла любой
+  призыв, а после загрузки сохранения прямо в Маджуле ещё и не находила места для знака. Пока открыто лобби, и то
+  и другое обходится.
+- The guest can talk to NPCs in the host's world (the "Talk" prompt turned every phantom down).
+  Гость может разговаривать с NPC в мире хоста (подсказка «Поговорить» отказывала любому фантому).
+- Both players dead in a boss fight: the guest waits until the host is up at the bonfire and comes back there,
+  not at the boss.
+  Если на боссе погибли оба, гость ждёт, пока хост встанет у костра, и возвращается туда, а не к боссу.
+- "Nobody comes back during a boss fight" works for the guest too: the host tells the guest that a fight is on.
+  «Никто не возвращается, пока идёт бой» работает и у гостя: хост сообщает гостю, что бой идёт.
+- The guest's return spots (last rest, arrival) are stamped with the right map, so they are actually used.
+  Точки возврата гостя (последний отдых, место прибытия) помечаются правильной картой и теперь используются.
+- A leftover "disconnect" from the host's previous lobby no longer turns the next join down as "wrong password".
+  Оставшийся «отключиться» от прошлого лобби хоста больше не отбивает новый вход как «неверный пароль».
+
+**Changed / Изменено**
+
+- The boss fog stays closed for the guest until the host is inside: for now only the host starts a boss fight,
+  and a guest who went in first found the boss idle.
+  Туман босса закрыт для гостя, пока не зайдёт хост: бой пока запускает только хост, а гость, зашедший первым,
+  находил босса неактивным.
+- The "busy" message no longer blames the bonfire when something else holds the game busy.
+  Сообщение «занято» больше не винит костёр, если игру держит что-то другое.
+
+**Known issues / Известные проблемы**
+
+- The guest can't start a boss fight: the fog lets the guest in once the host is inside.
+  Гость не может сам запустить бой с боссом: туман пропускает его, когда хост уже внутри.
+- NPC dialogue and shop progress may not stick for the guest.
+  Прогресс диалогов и магазинов у NPC может не сохраняться у гостя.
+- The host sees the guest as a white phantom.
+  Хост видит гостя белым фантомом.
+
 ## 0.1.0 — 2026-09-12
 
 First version. Tested by two players over Radmin VPN.

@@ -1,4 +1,4 @@
-DS2 Seamless Co-op 0.1.0 - for the HOST (the player friends join)
+DS2 Seamless Co-op 0.1.1 - for the HOST (the player friends join)
 ==================================================================
 (Русский текст - ниже)
 
@@ -30,7 +30,7 @@ IF SOMETHING IS WRONG
   - To remove the mod, delete dinput8.dll from the game folder.
 
 ==================================================================
-DS2 Seamless Co-op 0.1.0 - для ХОСТА (к нему подключаются друзья)
+DS2 Seamless Co-op 0.1.1 - для ХОСТА (к нему подключаются друзья)
 ==================================================================
 
 УСТАНОВКА (один раз)

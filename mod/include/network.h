@@ -41,7 +41,11 @@ enum class PacketType : uint8_t {
     // "I rested at a bonfire." The receiver replays the game's rest reset, so
     // enemies respawn on both sides at once (world_sync.cpp).
     WorldReset = 0x36,
-    
+    // The host's boss fight (running, phase), on every change and every few
+    // seconds while it runs. The guest's own game does not run the host's
+    // battle, so this is how the guest knows one is on (death_sync.cpp).
+    BossState = 0x37,
+
     // Custom data
     ChatMessage = 0x40,
     CustomData = 0x41
@@ -101,6 +105,12 @@ struct EventFlagPacket {
     PacketHeader header;
     uint32_t flagId;
     bool flagValue;
+};
+
+struct BossStatePacket {
+    PacketHeader header;
+    int32_t active;   // EventBossBattleManager+0x14: the battle running (0 none)
+    int32_t phase;    // +0x204: 1 fighting, 2 won, 3 cleanup
 };
 #pragma pack(pop)
 

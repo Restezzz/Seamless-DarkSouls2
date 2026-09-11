@@ -548,8 +548,9 @@ static void OnPhantomLeft() {
     LOG_INFO("[SEAMLESS] Phantom left world — removing from session");
     auto& sm = DS2Coop::Session::SessionManager::GetInstance();
     auto players = sm.GetPlayers();
-    auto* local = sm.GetLocalPlayer();
-    uint64_t localId = local ? local->playerId : 0;
+    // The id, not GetLocalPlayer(): that hands out a pointer into the player
+    // list, which the network thread changes under its lock.
+    uint64_t localId = DS2Coop::Network::PeerManager::GetInstance().GetLocalPlayerId();
     for (const auto& p : players) {
         if (p.playerId != localId) {
             sm.RemovePlayer(p.playerId);
@@ -664,8 +665,8 @@ static void AimSignAtOtherPlayer(uint8_t* data, size_t len) {
     if (!g_signUnderFeet.load()) return;
 
     auto& sm = DS2Coop::Session::SessionManager::GetInstance();
-    auto* local = sm.GetLocalPlayer();
-    const uint64_t localId = local ? local->playerId : 0;
+    // The id, not GetLocalPlayer() (a pointer into a list the network thread changes).
+    const uint64_t localId = DS2Coop::Network::PeerManager::GetInstance().GetLocalPlayerId();
     float tx = 0, ty = 0, tz = 0;
     uint32_t targetArea = 0;
     bool haveTarget = false;

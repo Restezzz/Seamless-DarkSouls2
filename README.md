@@ -4,7 +4,7 @@ A pathetic attempt at LukeYui imitation
 ---
 
 <p align="center">
-<b>Seamless Co-op for Dark Souls II: Scholar of the First Sin</b> · version <b>0.1.0</b><br>
+<b>Seamless Co-op for Dark Souls II: Scholar of the First Sin</b> · version <b>0.1.1</b><br>
 <a href="https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest"><b>Download / Скачать</b></a><br>
 English on the left · Русский справа
 </p>
@@ -29,7 +29,7 @@ boss, death or area.
 Everything goes through your own server, so the game never talks to the official servers:
 no invasions, no strangers.
 
-0.1.0 is the first version, played by two people. See **Known issues** below.
+It is an early version, played by two people so far. See **Known issues** below.
 
 </td>
 <td valign="top">
@@ -45,7 +45,7 @@ no invasions, no strangers.
 Всё идёт через свой сервер, игра не ходит на официальные серверы: никаких вторжений и
 случайных людей.
 
-0.1.0 — первая версия, её проверяли вдвоём. Что пока не работает — в разделе
+Это ранняя версия, пока её проверяли вдвоём. Что ещё не работает — в разделе
 **Известные проблемы** ниже.
 
 </td>
@@ -56,9 +56,10 @@ no invasions, no strangers.
 
 ## Features
 
-1. **Summon without the ritual.** The joiner's sign is placed by itself and the host summons
-   it by itself; the sign shows up right under the host's feet. No effigies, no soapstone
-   hunting, and the phantom timer never runs out.
+1. **Summon without the ritual, from anywhere.** The joiner's sign is placed by itself and
+   the host summons it by itself, even from places where signs can't be placed (Majula).
+   The sign shows up right under the host's feet. No effigies, no soapstone hunting, and the
+   phantom timer never runs out.
 2. **The co-op doesn't end.** Boss kills, deaths, bonfires and area changes don't send the
    guest home.
 3. **Go anywhere.** No co-op fog walls between areas: the guest walks the host's whole world,
@@ -68,17 +69,18 @@ no invasions, no strangers.
 5. **Chests and items in the host's world.** The guest loots them; what the guest picks up
    is theirs only (the host keeps their own copy), and it is gone from the guest's own world
    afterwards, so nothing is looted twice.
-6. **Death doesn't end the session.** A guest who dies comes straight back to the host's
+6. **NPCs in the host's world.** The guest can talk to them.
+7. **Death doesn't end the session.** A guest who dies comes straight back to the host's
    world, at the bonfire they last rested at there. The host dying doesn't kick the guest.
-7. **Boss fights together.** The guest follows the host through the boss fog; nobody comes
-   back until the fight is decided or both are dead.
-8. **In-game menu** (F1, and Insert always): a lobby with a password, the player list,
+8. **Boss fights together.** The host goes through the boss fog first, and the guest
+   follows; nobody comes back until the fight is decided or both are dead.
+9. **In-game menu** (F1, and Insert always): a lobby with a password, the player list,
    English and Russian, the key can be changed.
-9. **Rejoin after a crash.** The lobby and the server replace the crashed player's old
-   entry at once.
-10. **Crash log.** A crash leaves where it happened and the call stack in the log, plus a
+10. **Rejoin after a crash.** The lobby and the server replace the crashed player's old
+    entry at once.
+11. **Crash log.** A crash leaves where it happened and the call stack in the log, plus a
     dump file for the bug report.
-11. **One-click server for the host.** `StartServer.bat` finds the Radmin address, starts
+12. **One-click server for the host.** `StartServer.bat` finds the Radmin address, starts
     the server and prepares the key file for friends.
 
 </td>
@@ -86,9 +88,9 @@ no invasions, no strangers.
 
 ## Возможности
 
-1. **Призыв без ритуала.** Знак подключающегося ставится сам, хост призывает его сам, знак
-   появляется прямо у хоста под ногами. Не нужны куколки и мелки, таймер фантома не
-   кончается.
+1. **Призыв без ритуала, откуда угодно.** Знак подключающегося ставится сам, хост призывает
+   его сам — даже оттуда, где знаки ставить нельзя (Маджула). Знак появляется прямо у хоста
+   под ногами. Не нужны куколки и мелки, таймер фантома не кончается.
 2. **Кооп не заканчивается.** Убийство босса, смерть, костёр и переход между локациями не
    отправляют гостя домой.
 3. **Любые локации.** Нет кооп-тумана между областями: гость ходит по всему миру хоста, в том
@@ -98,16 +100,17 @@ no invasions, no strangers.
 5. **Сундуки и предметы в мире хоста.** Гость их собирает; подобранное гостем достаётся
    только ему (у хоста остаётся своя копия), и в его собственном мире этого потом нет —
    ничего не собирается дважды.
-6. **Смерть не рвёт сессию.** Погибший гость сразу возвращается в мир хоста — к костру, у
+6. **NPC в мире хоста.** Гость может с ними разговаривать.
+7. **Смерть не рвёт сессию.** Погибший гость сразу возвращается в мир хоста — к костру, у
    которого последний раз отдыхал там. Смерть хоста гостя не выкидывает.
-7. **Боссы вместе.** Гость проходит в туман босса вслед за хостом; никто не возвращается,
-   пока бой не решится или не погибнут оба.
-8. **Меню в игре** (F1, и всегда Insert): лобби с паролем, список игроков, английский и
+8. **Боссы вместе.** Хост первым проходит в туман босса, гость — за ним; никто не
+   возвращается, пока бой не решится или не погибнут оба.
+9. **Меню в игре** (F1, и всегда Insert): лобби с паролем, список игроков, английский и
    русский, клавишу можно поменять.
-9. **Возврат после вылета.** Лобби и сервер сразу заменяют старую запись вылетевшего игрока.
-10. **Журнал вылетов.** При вылете в логе остаются место и цепочка вызовов, а рядом —
+10. **Возврат после вылета.** Лобби и сервер сразу заменяют старую запись вылетевшего игрока.
+11. **Журнал вылетов.** При вылете в логе остаются место и цепочка вызовов, а рядом —
     файл дампа для отчёта.
-11. **Сервер в один клик.** `StartServer.bat` сам находит адрес Radmin, запускает сервер и
+12. **Сервер в один клик.** `StartServer.bat` сам находит адрес Radmin, запускает сервер и
     готовит файл-ключ для друзей.
 
 </td>
@@ -129,11 +132,11 @@ no invasions, no strangers.
 Open the **[latest release](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
 and take one archive:
 
-- **the host** (the player friends join): `Seamless-DS2-0.1.0-host.zip`
-- **friends**: `Seamless-DS2-0.1.0-joiner.zip`
+- **the host** (the player friends join): `Seamless-DS2-0.1.1-host.zip`
+- **friends**: `Seamless-DS2-0.1.1-joiner.zip`
 
 Older versions are on the [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases)
-page.
+page. Updating: extract the new archive over the old files.
 
 </td>
 <td valign="top">
@@ -151,10 +154,11 @@ page.
 Открой **[последний релиз](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
 и возьми один архив:
 
-- **хосту** (к нему подключаются друзья): `Seamless-DS2-0.1.0-host.zip`
-- **друзьям**: `Seamless-DS2-0.1.0-joiner.zip`
+- **хосту** (к нему подключаются друзья): `Seamless-DS2-0.1.1-host.zip`
+- **друзьям**: `Seamless-DS2-0.1.1-joiner.zip`
 
 Прошлые версии — на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases).
+Обновление: распаковать новый архив поверх старых файлов.
 
 </td>
 </tr>
@@ -169,7 +173,7 @@ page.
 2. Open the game folder: Steam → right-click Dark Souls II → **Manage → Browse local files**.
    It's `...\steamapps\common\Dark Souls II Scholar of the First Sin\Game\`, the folder with
    `DarkSoulsII.exe`.
-3. Extract **`Seamless-DS2-0.1.0-host.zip`** into it (replace `dinput8.dll` if asked).
+3. Extract **`Seamless-DS2-0.1.1-host.zip`** into it (replace `dinput8.dll` if asked).
 4. Run **`StartServer.bat`**. The first time Windows may ask about the firewall — allow it.
    The window shows **your address for friends** (26.x.x.x) and where the key file
    `ds2_server_public.key` is (in the game folder).
@@ -185,7 +189,7 @@ page.
 2. Открой папку игры: Steam → правый клик по Dark Souls II → **Управление → Просмотреть
    локальные файлы**. Это `...\steamapps\common\Dark Souls II Scholar of the First Sin\Game\`,
    там лежит `DarkSoulsII.exe`.
-3. Распакуй туда **`Seamless-DS2-0.1.0-host.zip`** (если спросит — заменить `dinput8.dll`).
+3. Распакуй туда **`Seamless-DS2-0.1.1-host.zip`** (если спросит — заменить `dinput8.dll`).
 4. Запусти **`StartServer.bat`**. В первый раз Windows может спросить про брандмауэр —
    разреши. Окно покажет **адрес для друзей** (26.x.x.x) и где лежит файл-ключ
    `ds2_server_public.key` (в папке игры).
@@ -200,7 +204,7 @@ page.
 ## Friend: setting up (once)
 
 1. Install Radmin VPN and join the host's network (**Network → Join network**).
-2. Extract **`Seamless-DS2-0.1.0-joiner.zip`** into your game folder (same place as above).
+2. Extract **`Seamless-DS2-0.1.1-joiner.zip`** into your game folder (same place as above).
 3. Put the host's **`ds2_server_public.key`** into the same folder.
 4. Open **`ds2_seamless_coop.ini`** in Notepad and write the host's address after
    `server_ip=`, for example `server_ip=26.12.34.56`. Save.
@@ -211,7 +215,7 @@ page.
 ## Друг: настройка (один раз)
 
 1. Поставь Radmin VPN и войди в сеть хоста (**Сеть → Присоединиться к сети**).
-2. Распакуй **`Seamless-DS2-0.1.0-joiner.zip`** в свою папку игры (туда же, что и выше).
+2. Распакуй **`Seamless-DS2-0.1.1-joiner.zip`** в свою папку игры (туда же, что и выше).
 3. Положи в ту же папку **`ds2_server_public.key`** от хоста.
 4. Открой **`ds2_seamless_coop.ini`** Блокнотом и впиши адрес хоста после `server_ip=`,
    например `server_ip=26.12.34.56`. Сохрани.
@@ -232,8 +236,9 @@ page.
 4. **Friend:** **F1** → **Join a friend** → the host's address and the password →
    **Connect**. Stand somewhere, not sitting at a bonfire: the sign is placed, the host's
    game summons it, and a loading screen takes you to the host.
-5. Play. Leaving: menu → **Leave the lobby** (the guest goes home). When you are done the
-   host runs `StopServer.bat`.
+5. Play. Bosses: the host walks into the fog first, then it lets the guest in. Leaving:
+   menu → **Leave the lobby** (the guest goes home). When you are done the host runs
+   `StopServer.bat`.
 
 The menu opens with **F1** (changeable in Settings); **Insert** always opens it too, **Esc**
 closes it. While the menu is open the game doesn't get your keys and mouse.
@@ -252,8 +257,9 @@ closes it. While the menu is open the game doesn't get your keys and mouse.
 4. **Друг:** **F1** → **Подключиться к другу** → адрес хоста и пароль →
    **Подключиться**. Встань где-нибудь, только не сиди у костра: знак поставится, игра
    хоста его призовёт, и после загрузки ты окажешься у хоста.
-5. Играйте. Выйти: меню → **Покинуть лобби** (гость уходит домой). Наигрались — хост
-   запускает `StopServer.bat`.
+5. Играйте. Боссы: хост первым заходит в туман, после этого туман пропускает и гостя.
+   Выйти: меню → **Покинуть лобби** (гость уходит домой). Наигрались — хост запускает
+   `StopServer.bat`.
 
 Меню открывается на **F1** (меняется в Настройках); **Insert** открывает его всегда, **Esc**
 закрывает. Пока меню открыто, игра не получает клавиатуру и мышь.
@@ -341,20 +347,17 @@ the menu key are easier to change in the menu itself.
 - **The game says it's offline.** The host's server isn't running (start `StartServer.bat`
   before the game), Radmin isn't connected, the key file is missing or comes from another
   host, or `server_ip` is wrong.
-- **Nobody gets summoned.** Don't sit at a bonfire; check the lobby password; see the known
-  issue about Majula.
+- **Nobody gets summoned.** Don't sit at a bonfire; check the lobby password.
+- **An NPC offers no "Talk".** Walk away from the NPC and come back.
 - **A crash or a bug.** Open an [issue](https://github.com/Restezzz/Seamless-DarkSouls2/issues)
   and attach `ds2_seamless_coop.log` and any `ds2_seamless_crash_*.dmp` from the game folder
   of the player whose game crashed.
 - **Removing the mod.** Delete `dinput8.dll` from the game folder.
 
-## Known issues (0.1.0)
+## Known issues (0.1.1)
 
-- Joining while standing where signs can't be placed (Majula) doesn't work yet.
-- If both players die in a boss fight, the guest may come back at the boss instead of the
-  bonfire.
-- If the guest walks into a boss fog before the host, the boss stays idle.
-- The guest can't talk to NPCs.
+- The guest can't start a boss fight: the fog lets the guest in once the host is inside.
+- NPC dialogue and shop progress may not stick for the guest.
 - The host sees the guest as a white phantom.
 
 </td>
@@ -364,19 +367,17 @@ the menu key are easier to change in the menu itself.
 
 - **Игра пишет «не в сети».** У хоста не запущен сервер (`StartServer.bat` — до игры), не
   подключён Radmin, нет файла-ключа или он от другого хоста, либо неверный `server_ip`.
-- **Никого не призывает.** Не сиди у костра; проверь пароль лобби; см. известную проблему
-  про Маджулу.
+- **Никого не призывает.** Не сиди у костра; проверь пароль лобби.
+- **NPC не предлагает «Поговорить».** Отойди от NPC и подойди снова.
 - **Вылет или ошибка.** Создай [issue](https://github.com/Restezzz/Seamless-DarkSouls2/issues)
   и приложи `ds2_seamless_coop.log` и файлы `ds2_seamless_crash_*.dmp` из папки игры того,
   у кого вылетело.
 - **Удалить мод.** Удалить `dinput8.dll` из папки игры.
 
-## Известные проблемы (0.1.0)
+## Известные проблемы (0.1.1)
 
-- Подключение, стоя там, где нельзя ставить знаки (Маджула), пока не работает.
-- Если на боссе погибли оба, гость может вернуться к боссу, а не к костру.
-- Если гость заходит в туман босса раньше хоста, босс стоит неактивным.
-- Гость не может разговаривать с NPC.
+- Гость не может сам запустить бой с боссом: туман пропускает его, когда хост уже внутри.
+- Прогресс диалогов и магазинов у NPC может не сохраняться у гостя.
 - Хост видит гостя белым фантомом.
 
 </td>

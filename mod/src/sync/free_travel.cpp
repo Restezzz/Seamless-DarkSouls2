@@ -284,16 +284,23 @@ bool IsGuestInWorld() {
     }
 }
 
-// A boss fog the host has gone through reads "fog, one prompt" (state 3) for the
-// guest too, but the guest had no way through it: at the Last Giant (12.09) ee
-// stood outside while Restez was in. So once the host is in, the guest's copy
-// of that fog (kind 1) is simply opened; before that it stays as the game has it.
+// A boss fog (kind 1) for a guest in the host's world, with the doors behaving
+// as in a solo game:
+//   state 3 -- the host has gone through (+0x85 == 100). The guest had no way
+//              through it (the Last Giant, 12.09: ee stood outside while Restez
+//              was in), so it is opened.
+//   state 2 -- nobody is through yet. The fight starts from the host: a guest
+//              who went in first found the boss idle (12.09 00:45). It stays a
+//              wall until the host is in -- or until the host reports a fight
+//              running, for a guest whose copy of the door missed the crossing.
 uint64_t __fastcall DoorStateDetour(void* Door) {
     uint64_t Result = reinterpret_cast<DoorStateFn>(g_doorStateOriginal)(Door);
-    if ((Result & 0xFF) == 3 && GroupPatched(kDoorSites, _countof(kDoorSites)) && IsGuestInWorld()) {
+    const uint8_t Stock = static_cast<uint8_t>(Result);
+    if ((Stock == 2 || Stock == 3) && GroupPatched(kDoorSites, _countof(kDoorSites)) && IsGuestInWorld()) {
         DoorInfo Info{};
         if (ReadDoor(reinterpret_cast<uintptr_t>(Door), &Info) && Info.Kind == 1) {
-            Result &= ~static_cast<uint64_t>(0xFF);   // state 0: open, no fog
+            const bool Open = Stock == 3 || IsHostInBossFight();
+            Result = (Result & ~static_cast<uint64_t>(0xFF)) | (Open ? 0u : 4u);   // 0 open, 4 wall
         }
     }
     NoteDoor(reinterpret_cast<uintptr_t>(Door), static_cast<uint8_t>(Result));

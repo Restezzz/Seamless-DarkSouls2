@@ -971,6 +971,9 @@ bool HookBonfireGate() {
 
     int Ok = 0;
     for (int i = 0; i < kProbeCount; i++) {
+        // death_sync.cpp hooks the last-bonfire setter for real (LastBonfireDetour);
+        // a probe on it could only fail with MH_ERROR_ALREADY_CREATED.
+        if (Rvas[i] == 0x44FE30) continue;
         g_probes[i].Rva = Rvas[i];
         void* Target = reinterpret_cast<void*>(ExeBase + Rvas[i]);
         if (DS2Coop::Hooks::HookManager::GetInstance().InstallHook(
@@ -2267,13 +2270,21 @@ void __fastcall SignTickDetour(void* Manager, uint32_t Delta) {
         LOG_INFO("[PLACE] calling exe+0x2A2780(manager=%p, type=%u)", Manager, Type);
         const bool Watch = g_autoPlaceWatch.exchange(false);
         const uint32_t CreatesBefore = DS2Coop::Hooks::GetSignCreateCount();
+        // A create that failed before (no spot, Majula) leaves the live-sign flag
+        // up with no id; the game's own cleanup takes it down first, or the next
+        // create would run the remove chain with a bogus spot (summon_accept.cpp).
+        DS2Coop::Sync::ClearStaleLiveSign(Manager);
         const bool Silenced = StubReturnsOne(0x2A1BF0, true);
+        // Where the game finds no spot for a sign (a save loaded straight into
+        // Majula), the spot where the player stands is used -- this call only.
+        DS2Coop::Sync::SetModSignPlacement(true);
         __try {
             Submit(Manager, &Type);
             LOG_INFO("[PLACE] returned cleanly");
         } __except(EXCEPTION_EXECUTE_HANDLER) {
             LOG_ERROR("[PLACE] threw — wrong entry point or wrong arguments");
         }
+        DS2Coop::Sync::SetModSignPlacement(false);
         if (Silenced) StubReturnsOne(0x2A1BF0, false);
         // Where signs are not allowed the game would turn the summon down on
         // arrival; the mod's own sign is let through (summon_accept.cpp).
@@ -2754,6 +2765,9 @@ bool PlayerSync::Initialize() {
     // A death no longer ends the co-op: the guest comes straight back to the
     // partner's world, and boss fights wait for both (death_sync.cpp).
     DS2Coop::Sync::InstallDeathSync(SeamlessCoopMod::GetInstance().GetConfig().death_respawn);
+
+    // A guest can talk to NPCs in the host's world (npc_talk.cpp).
+    DS2Coop::Sync::InstallNpcTalk();
 
     // Verify we have the GameManagerImp address
     auto& resolver = DS2Coop::AddressResolver::GetInstance();

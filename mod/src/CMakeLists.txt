@@ -14,6 +14,7 @@ add_library(ds2_seamless_coop SHARED
     sync/summon_accept.cpp
     sync/free_travel.cpp
     sync/death_sync.cpp
+    sync/npc_talk.cpp
     utils/logger.cpp
     utils/crash_log.cpp
     utils/memory.cpp
