@@ -1,0 +1,33 @@
+# Build output
+mod/build/
+mod/build_preview/
+mod/tools/ui_preview/build/
+*.obj
+*.ilk
+*.exp
+*.lib
+*.pdb
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Symbols of each built DLL, kept locally to read crash logs (symbols/<md5>/)
+symbols/
+
+# Logs and crash dumps
+*.log
+*.dmp
+
+# Server data made on the host's machine: its own keys, database and logs.
+# Never commit these (private.key above all).
+private.key
+*.sqlite
+*.time
+release/host/SeamlessServer/Saved/default/public.key
+release/host/SeamlessServer/logs/
+release/host/SeamlessServer/server_ip.txt
+
+# OS
+Thumbs.db
+desktop.ini
