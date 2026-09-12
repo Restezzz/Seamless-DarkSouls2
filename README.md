@@ -7,7 +7,7 @@ A pathetic attempt at LukeYui imitation
 Бесшовный кооператив для Dark Souls 2</h3>
 
 <p align="center">
-version <b>0.1.4</b> ·
+version <b>0.1.3</b> ·
 <a href="https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest"><b>Download / Скачать</b></a> ·
 <a href="https://restezzz.github.io/Seamless-DarkSouls2/">Website / Сайт</a><br>
 English on the left · Русский справа
@@ -136,8 +136,8 @@ It is an early version, played by two people so far. See **Known issues** below.
 Open the **[latest release](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
 and take one archive:
 
-- **the host** (the player friends join): `Seamless-DS2-0.1.4-host.zip`
-- **friends**: `Seamless-DS2-0.1.4-joiner.zip`
+- **the host** (the player friends join): `Seamless-DS2-0.1.3-host.zip`
+- **friends**: `Seamless-DS2-0.1.3-joiner.zip`
 
 Older versions are on the [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases)
 page. Updating: extract the new archive over the old files.
@@ -158,8 +158,8 @@ page. Updating: extract the new archive over the old files.
 Открой **[последний релиз](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
 и возьми один архив:
 
-- **хосту** (к нему подключаются друзья): `Seamless-DS2-0.1.4-host.zip`
-- **друзьям**: `Seamless-DS2-0.1.4-joiner.zip`
+- **хосту** (к нему подключаются друзья): `Seamless-DS2-0.1.3-host.zip`
+- **друзьям**: `Seamless-DS2-0.1.3-joiner.zip`
 
 Прошлые версии — на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases).
 Обновление: распаковать новый архив поверх старых файлов.
@@ -177,7 +177,7 @@ page. Updating: extract the new archive over the old files.
 2. Open the game folder: Steam → right-click Dark Souls II → **Manage → Browse local files**.
    It's `...\steamapps\common\Dark Souls II Scholar of the First Sin\Game\`, the folder with
    `DarkSoulsII.exe`.
-3. Extract **`Seamless-DS2-0.1.4-host.zip`** into it (replace `dinput8.dll` if asked).
+3. Extract **`Seamless-DS2-0.1.3-host.zip`** into it (replace `dinput8.dll` if asked).
 4. Run **`StartServer.bat`**. The first time Windows may ask about the firewall — allow it.
    The window shows **your address for friends** (26.x.x.x) and where the key file
    `ds2_server_public.key` is (in the game folder).
@@ -193,7 +193,7 @@ page. Updating: extract the new archive over the old files.
 2. Открой папку игры: Steam → правый клик по Dark Souls II → **Управление → Просмотреть
    локальные файлы**. Это `...\steamapps\common\Dark Souls II Scholar of the First Sin\Game\`,
    там лежит `DarkSoulsII.exe`.
-3. Распакуй туда **`Seamless-DS2-0.1.4-host.zip`** (если спросит — заменить `dinput8.dll`).
+3. Распакуй туда **`Seamless-DS2-0.1.3-host.zip`** (если спросит — заменить `dinput8.dll`).
 4. Запусти **`StartServer.bat`**. В первый раз Windows может спросить про брандмауэр —
    разреши. Окно покажет **адрес для друзей** (26.x.x.x) и где лежит файл-ключ
    `ds2_server_public.key` (в папке игры).
@@ -208,7 +208,7 @@ page. Updating: extract the new archive over the old files.
 ## Friend: setting up (once)
 
 1. Install Radmin VPN and join the host's network (**Network → Join network**).
-2. Extract **`Seamless-DS2-0.1.4-joiner.zip`** into your game folder (same place as above).
+2. Extract **`Seamless-DS2-0.1.3-joiner.zip`** into your game folder (same place as above).
 3. Put the host's **`ds2_server_public.key`** into the same folder.
 4. Open **`ds2_seamless_coop.ini`** in Notepad and write the host's address after
    `server_ip=`, for example `server_ip=26.12.34.56`. Save.
@@ -219,7 +219,7 @@ page. Updating: extract the new archive over the old files.
 ## Друг: настройка (один раз)
 
 1. Поставь Radmin VPN и войди в сеть хоста (**Сеть → Присоединиться к сети**).
-2. Распакуй **`Seamless-DS2-0.1.4-joiner.zip`** в свою папку игры (туда же, что и выше).
+2. Распакуй **`Seamless-DS2-0.1.3-joiner.zip`** в свою папку игры (туда же, что и выше).
 3. Положи в ту же папку **`ds2_server_public.key`** от хоста.
 4. Открой **`ds2_seamless_coop.ini`** Блокнотом и впиши адрес хоста после `server_ip=`,
    например `server_ip=26.12.34.56`. Сохрани.
@@ -364,7 +364,7 @@ the menu key are easier to change in the menu itself.
   of the player whose game crashed.
 - **Removing the mod.** Delete `dinput8.dll` from the game folder.
 
-## Known issues (0.1.4)
+## Known issues (0.1.3)
 
 - NPCs are missing or see-through for the guest: they are never put into the world it joined.
   Forcing the "Talk" prompt is off (`npc_talk`) — it never produced a prompt, and a crash came
@@ -389,7 +389,7 @@ the menu key are easier to change in the menu itself.
   у кого вылетело.
 - **Удалить мод.** Удалить `dinput8.dll` из папки игры.
 
-## Известные проблемы (0.1.4)
+## Известные проблемы (0.1.3)
 
 - У гостя NPC отсутствуют или прозрачны: их вообще не создают в мире, куда он вошёл.
   Принудительная подсказка «Поговорить» выключена (`npc_talk`) — она ни разу не появилась,

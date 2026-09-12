@@ -6,7 +6,7 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 Каждая версия лежит на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) двумя
 архивами: `Seamless-DS2-<версия>-host.zip` для хоста и `Seamless-DS2-<версия>-joiner.zip` для друзей.
 
-## 0.1.4 — 2026-09-12
+## 0.1.3 — 2026-09-12
 
 **Fixed / Исправлено**
 
@@ -44,9 +44,7 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
   разу, а игра вылетела с чтением по адресу 0 в exe+0x18B10E из exe+0x4534A6 — это путь деструктора самого
   объекта подсказки, того кода, в который влезает эта правка. Не доказано — именно поэтому и выключено.
 
-## 0.1.3 — 2026-09-12
-
-**Fixed / Исправлено**
+**Also in 0.1.3 / Также в 0.1.3**
 
 - The boss fog lets a guest walk in again, the way it did in 0.1.0. Holding the guest back until the host was
   inside was my own change in 0.1.1, and it was the wrong call: a host standing at the fog waiting for the guest
