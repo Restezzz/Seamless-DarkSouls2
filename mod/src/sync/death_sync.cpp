@@ -83,6 +83,15 @@ constexpr uint32_t kJoinLeave      = 0x2C2F20;    // join controller slot A0 (ct
 constexpr uint32_t kResultSequence = 0x18F9C0;    // (EventResult*, out, arg3, code*, row*): builds the job chain
 constexpr uint32_t kPhantomParam   = 0x16F540;    // (phantom type) -> that type's param row ([GMImp+0x18] lookup)
 
+// The camera (docs §3.23). Offsets, not RVAs: all of them hang off GMImp.
+constexpr uint32_t kCameraManager  = 0x20;        // [GMImp+0x20]  CameraManager
+constexpr uint32_t kCamActiveKind  = 0x48;        // int: which operator is live (2 = Ingame, 1 = Player)
+constexpr uint32_t kCamIngame      = 0x28;        // [CameraManager+0x28]  IngameCameraOperator
+constexpr uint32_t kCamFollowed    = 0xF8;        // the character the camera follows
+constexpr uint32_t kCamMode        = 0xD0;        // current camera mode (10 = default)
+constexpr uint32_t kCamModeWanted  = 0x1520;      // requested camera mode
+constexpr uint32_t kCameraCommand  = 0x492080;    // CameraManager::Command(mgr, cmd): id 3 = follow this character
+
 constexpr int       kJoinInWorld        = 7;      // join controller state: in the host's world
 constexpr ULONGLONG kRejoinSettleMs     = 3000;   // home and alive this long before joining again
 constexpr ULONGLONG kPartnerSettleMs    = 4000;   // the partner up this long, so its position is the new one
@@ -103,6 +112,7 @@ using NoticeFn  = void(__fastcall*)(void*, int);
 using LeaveFn   = void(__fastcall*)(void*, int);
 using SeqFn     = void*(__fastcall*)(void*, void*, void*, const int*, const uint8_t*);
 using ParamRowFn = void*(__fastcall*)(uint32_t);
+using CamCmdFn   = void(__fastcall*)(void*, void*);
 
 // Set by MH_CreateHook before the hook goes live, so a detour never sees null.
 void* g_phantomBranchOriginal = nullptr;
@@ -112,6 +122,7 @@ void* g_requestWarpOriginal   = nullptr;
 void* g_mpNoticeOriginal      = nullptr;
 void* g_joinLeaveOriginal     = nullptr;
 void* g_resultSeqOriginal     = nullptr;
+bool  g_cameraMoved           = false;   // the camera was pointed away from this player
 
 std::atomic<bool>      g_enabled{ true };
 std::atomic<bool>      g_partnerAlive{ true };     // from the partner's PlayerDeath / PlayerRespawn
@@ -540,6 +551,95 @@ bool HookAt(uint32_t Rva, void* Detour, void** Original, const char* What) {
     return false;
 }
 
+// Who the camera is following, and whether the operator that can be retargeted
+// is the live one. Reads only -- no game function is called.
+//
+// Asked for on 12.09: when a guest dies in a boss fight the camera should follow
+// whoever is still standing. The game has its own way to do that (command id 3
+// to exe+0x492080, which reaches IngameCameraOperator::SetChr), but it only
+// bites while the ACTIVE camera kind is 2: kind 1 reads [GMImp+0xD0] for itself
+// and would ignore any retarget. Nothing in the disassembly says which kind is
+// live during a boss fight, so nothing is written until a real death has printed
+// it. The line also settles whether +0xF8 holds a plain character pointer: if it
+// equals [GMImp+0xD0] while alive, it does, and the reference helpers are not
+// needed at all.
+void LogCameraState(const char* When) {
+    __try {
+        uintptr_t Gm = 0, Mgr = 0, Ingame = 0, Local = 0, Followed = 0;
+        if (!ReadPtr(ExeBase() + kGameManagerImp, &Gm) || !Gm) return;
+        ReadPtr(Gm + 0xD0, &Local);
+        if (!ReadPtr(Gm + kCameraManager, &Mgr) || !Mgr) {
+            LOG_INFO("[CAM] %s: no camera manager yet", When);
+            return;
+        }
+        const int Kind = *reinterpret_cast<const int*>(Mgr + kCamActiveKind);
+        ReadPtr(Mgr + kCamIngame, &Ingame);
+        int Mode = -1, Wanted = -1;
+        if (Ingame) {
+            ReadPtr(Ingame + kCamFollowed, &Followed);
+            Mode   = *reinterpret_cast<const int*>(Ingame + kCamMode);
+            Wanted = *reinterpret_cast<const int*>(Ingame + kCamModeWanted);
+        }
+        LOG_INFO("[CAM] %s: active kind %d (%s), following 0x%llX, local player 0x%llX (%s), mode %d -> %d",
+                 When, Kind,
+                 Kind == 2 ? "Ingame -- a retarget would bite" : "NOT the Ingame operator",
+                 static_cast<unsigned long long>(Followed),
+                 static_cast<unsigned long long>(Local),
+                 (Followed && Followed == Local) ? "same, so +0xF8 is a plain pointer" : "different",
+                 Mode, Wanted);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LOG_WARNING("[CAM] %s: reading the camera threw -- left alone", When);
+    }
+}
+
+// Point the camera at a character, the game's own way (docs §3.23).
+//
+// Command id 3 to exe+0x492080 reaches IngameCameraOperator::SetChr, which is
+// the path the game itself uses -- once, at exe+0x1BF536, with the local player.
+// Never called with null: SetChr skips its own store for null but still hands it
+// to all ten sub-operators, which would leave the operator inconsistent. It only
+// bites while the live camera kind is 2, so that is checked here instead of
+// assumed, and the reason is written down when it is not.
+bool PointCameraAt(uintptr_t Chr, const char* Why, bool Say) {
+    if (!Chr) return false;
+    __try {
+        uintptr_t Gm = 0, Mgr = 0;
+        if (!ReadPtr(ExeBase() + kGameManagerImp, &Gm) || !Gm) return false;
+        if (!ReadPtr(Gm + kCameraManager, &Mgr) || !Mgr) return false;
+        const int Kind = *reinterpret_cast<const int*>(Mgr + kCamActiveKind);
+        if (Kind != 2) {
+            if (Say) {
+                LOG_INFO("[CAM] not moving the camera (%s): the live operator is kind %d, and only kind 2 follows "
+                         "a character -- kind 1 reads the local player for itself", Why, Kind);
+            }
+            return false;
+        }
+        uint8_t Cmd[0x30] = {};
+        *reinterpret_cast<int*>(Cmd) = 3;
+        *reinterpret_cast<uintptr_t*>(Cmd + 0x10) = Chr;
+        reinterpret_cast<CamCmdFn>(ExeBase() + kCameraCommand)(reinterpret_cast<void*>(Mgr), Cmd);
+        if (Say) LOG_INFO("[CAM] camera now follows 0x%llX (%s)", static_cast<unsigned long long>(Chr), Why);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LOG_WARNING("[CAM] pointing the camera (%s) threw -- left alone", Why);
+        return false;
+    }
+}
+
+// While this player is down and the camera was moved, keep it there. The
+// operator binds itself back to the local player whenever its own reference
+// resolves to nothing (exe+0x495B60), and whether a death does that is exactly
+// what is unknown -- so this re-asks once a second, quietly.
+void TickCameraHold(int32_t Hp) {
+    if (!g_cameraMoved || Hp == kNoHp || !IsDead(Hp)) return;
+    static ULONGLONG s_at = 0;
+    const ULONGLONG Now = GetTickCount64();
+    if (Now - s_at < 1000) return;
+    s_at = Now;
+    const uintptr_t Partner = GetPartnerCharacter(5000);
+    if (Partner) PointCameraAt(Partner, "still down", false);
+}
+
 // --- tick parts ----------------------------------------------------------------
 void TickLife(int32_t Hp) {
     if (Hp == kNoHp) return;   // loading: keep the last value
@@ -547,6 +647,30 @@ void TickLife(int32_t Hp) {
     const bool Back = IsDead(g_lastHp) && IsAlive(Hp);
     g_lastHp = Hp;
     if (!Died && !Back) return;
+
+    LogCameraState(Died ? "died" : "back up");
+
+    // The camera follows whoever is still standing (asked for on 12.09), and
+    // goes back by itself the moment this player is up again. Only in a session,
+    // and only while the partner's character has been seen recently -- the mod
+    // learns it from the code that draws it (npc_talk.cpp), so it is known
+    // exactly while the partner is on screen, which is when this matters.
+    if (g_enabled.load() && Session::SessionManager::GetInstance().IsActive()) {
+        if (Died) {
+            const uintptr_t Partner = GetPartnerCharacter(5000);
+            if (Partner) {
+                g_cameraMoved = PointCameraAt(Partner, "this player is down", true);
+            } else {
+                LOG_INFO("[CAM] nobody to follow: the partner's character has not been seen in the last 5 s");
+            }
+        } else if (g_cameraMoved) {
+            uintptr_t Gm = 0, Local = 0;
+            if (ReadPtr(ExeBase() + kGameManagerImp, &Gm) && ReadPtr(Gm + 0xD0, &Local) && Local) {
+                PointCameraAt(Local, "up again", true);
+            }
+            g_cameraMoved = false;
+        }
+    }
     auto& Players = Session::SessionManager::GetInstance();
     // The id, not GetLocalPlayer(): that hands out a pointer into the player
     // list, which the network thread changes under its lock.
@@ -960,6 +1084,7 @@ void DeathSyncGameTick() {
     const int     Join = ReadJoinState();
     const int32_t Hp   = ReadLocalHp();
     TickLife(Hp);
+    TickCameraHold(Hp);
     TickBoss(Join);
     TickArrival(Join);
     TickTravelList(Join);

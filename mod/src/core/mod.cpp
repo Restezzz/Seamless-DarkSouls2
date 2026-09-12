@@ -356,6 +356,8 @@ void SeamlessCoopMod::LoadConfig() {
                     m_config.boss_fog_wait = (value == "true" || value == "1");
                 } else if (key == "npc_talk") {
                     m_config.npc_talk = (value == "true" || value == "1");
+                } else if (key == "npc_solid") {
+                    m_config.npc_solid = (value == "true" || value == "1");
                 } else if (key == "debug_hotkeys") {
                     m_config.debug_hotkeys = (value == "true" || value == "1");
                 } else if (key == "auto_summon") {
@@ -409,6 +411,7 @@ void SeamlessCoopMod::SaveConfig() {
         configFile << "npc_spawn=" << (m_config.npc_spawn ? "true" : "false") << "\n";
         configFile << "boss_fog_wait=" << (m_config.boss_fog_wait ? "true" : "false") << "\n";
         configFile << "npc_talk=" << (m_config.npc_talk ? "true" : "false") << "\n";
+        configFile << "npc_solid=" << (m_config.npc_solid ? "true" : "false") << "\n";
         configFile << "debug_hotkeys=" << (m_config.debug_hotkeys ? "true" : "false") << "\n";
         configFile << "sign_under_feet=" << (m_config.sign_under_feet ? "true" : "false") << "\n";
         configFile << "flag_sync=" << m_config.flag_sync << "\n";

@@ -61,12 +61,19 @@ struct ModConfig {
     // Off by default now: it changes what the game does for no gain we can see.
     // Delete still flips it in game for another look.
     bool npc_spawn = false;
-    // Force the "Talk" prompt open for a guest (the game turns every phantom
-    // down). Off by default: in two sessions it never produced a single prompt,
-    // and the game then crashed reading address 0 at exe+0x18B10E from
-    // exe+0x4534A6 -- inside the very prompt code this reaches into. Not proven
-    // to be the cause, which is exactly why it is not on.
-    bool npc_talk = false;
+    // Draw the world's other characters solid for a guest instead of as ghosts,
+    // and the partner solid on the host's screen. The row a character is drawn
+    // with comes from its own PlayerType, per character, so this answers 0 for
+    // everything that is not the local player (docs §3.24). On by default.
+    bool npc_solid = true;
+    // Ask an NPC's prompt on a guest's behalf the way it is asked for a host.
+    // The game refuses every phantom id before it looks at anything else, which
+    // is why no NPC ever offered a guest "Talk". The first attempt overruled the
+    // answer afterwards and failed -- the refusal is cached in the prompt's own
+    // bookkeeping -- so the phantom id is zeroed for the duration of the call
+    // instead. On by default; the answer is only re-taken when the guest leaves
+    // and re-enters the NPC's zone.
+    bool npc_talk = true;
     // Make a boss fog hold a guest back until the other player has gone in.
     // Off: the fog behaves for a guest as it does for a host, the way 0.1.0 had
     // it. On, a guest who would otherwise walk in first cannot wake the boss by

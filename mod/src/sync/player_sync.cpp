@@ -3084,6 +3084,9 @@ bool PlayerSync::Initialize() {
     // A guest can talk to NPCs in the host's world (npc_talk.cpp)...
     DS2Coop::Sync::InstallNpcTalk();
     DS2Coop::Sync::SetNpcTalkEnabled(SeamlessCoopMod::GetInstance().GetConfig().npc_talk);
+    // ... and sees them solid rather than as ghosts, which is the same field
+    // (docs §3.24). This also makes the partner solid on a host's screen.
+    DS2Coop::Sync::SetNpcSolidEnabled(SeamlessCoopMod::GetInstance().GetConfig().npc_solid);
 
     // ... once the world it joined has finished putting those NPCs in at all
     // (MpActiveHook above, ini npc_spawn).

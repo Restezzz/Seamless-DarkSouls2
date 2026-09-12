@@ -25,6 +25,27 @@
 //
 // What a talk writes may not all stick for a guest: the event flag setter
 // exe+0x474A60 drops a guest's writes (unless exe+0x25CDB0 lets them through).
+//
+// 12.09, and this is what the first attempt had wrong. Both of the guest's NPC
+// symptoms -- see-through characters and no prompt -- come from the same field,
+// the phantom id at [[chr+0xB0]+0x3C] and its neighbours (docs §3.24):
+//
+//   * see-through: exe+0x16F6D0(chr) returns [[chr+0xB0]+0x38] if positive, else
+//     +0x48, else 0, and that number IS the CHR_PHANTOM_PARAM row the character
+//     is drawn with. Nothing global paints a guest's world -- it is per
+//     character, so answering 0 for everything that is not the local player is
+//     enough to have the game draw the world solid.
+//   * no prompt: the refusal is on the GUEST, not the NPC. For phantom id 1 the
+//     jump table at exe+0x4539A8 wants bit 2 of the prompt's flags, and a
+//     script's flags are 01 FC 0F, so the answer is no before hollowing or
+//     anything else is looked at. With id 0 that whole branch is skipped.
+//
+// Which also explains why overruling the answer did nothing: the result is
+// cached in the character's bit in ctrl+0xA0 and only re-taken on entering or
+// leaving the prompt's zone (exe+0x454400 clears it). Forcing a yes after the
+// fact registered a prompt the bookkeeping had already written off -- no prompt
+// in two sessions and a crash at exe+0x18B10E out of exe+0x4534A6. So the id is
+// zeroed for the duration of the call instead, and the game answers on merit.
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -37,6 +58,7 @@
 
 #include "../../include/sync.h"
 #include "../../include/hooks.h"
+#include "../../include/session.h"
 #include "../../include/utils.h"
 
 #include <atomic>
@@ -62,8 +84,13 @@ constexpr int32_t   kJoinInWorld    = 7;          // join controller state: in t
 constexpr int32_t   kActionTalk     = 9;
 constexpr ptrdiff_t kFlagsInPrompt  = 0xAA;       // the flags the predicate gets sit at ctrl+0xAA
 constexpr ptrdiff_t kActionInPrompt = 0x8C;       // the prompt's action type at ctrl+0x8C
+// The row of CHR_PHANTOM_PARAM a character is drawn with; 0 means solid.
+constexpr uint32_t  kPhantomRow       = 0x16F6D0; // (chr) -> phantom param row id
+constexpr ptrdiff_t kTypeInChr        = 0xB0;     // chr+0xB0 -> PlayerType
+constexpr ptrdiff_t kPhantomIdInType  = 0x3C;     // PlayerType+0x3C ChrNetworkPhantomId
 
 using PromptAllowedFn = uint64_t(__fastcall*)(void*, const uint8_t*);
+using PhantomRowFn    = uint32_t(__fastcall*)(void*);
 
 // Set by MH_CreateHook before the hook goes live, so the detour never sees null.
 void* g_promptAllowedOriginal = nullptr;
@@ -75,6 +102,17 @@ std::atomic<uintptr_t> g_lastOpenedPrompt{ 0 };   // for the log: one line per p
 // exe+0x4534A6, which is inside this same prompt code. That is a suspicion and
 // not a proof, and a suspicion is reason enough to leave it off.
 std::atomic<bool> g_talkEnabled{ false };
+
+void* g_phantomRowOriginal = nullptr;
+std::atomic<bool> g_solidEnabled{ true };
+
+// The partner's character object, noticed while the game asks how to draw it.
+// This is the only place the mod ever sees it: the session only carries the
+// partner's coordinates, and the phantom itself is made by the game's own
+// netcode. Kept with the time it was last seen, because a character does not
+// survive a map load. The camera needs it (docs §3.23).
+std::atomic<uintptr_t> g_partnerChr{ 0 };
+std::atomic<unsigned long long> g_partnerChrAt{ 0 };
 
 uintptr_t ExeBase() {
     static const uintptr_t Base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
@@ -114,20 +152,90 @@ bool IsGuestInHostWorld() {
     return ReadI32(Ctrl + 0xF8, &State) && State == kJoinInWorld;
 }
 
+// Every character the game asks how to draw, and two jobs done on the way.
+//
+// Answering 0 for anything that is not the local player means the row lookup
+// finds no ghost row and the solid branch runs, so the world stops being
+// see-through for a guest -- and the partner stops being a white phantom on the
+// host's screen, which was on the list too. The NPCs' own fields are left alone,
+// so everything else that reads them still sees the truth.
+uint32_t __fastcall PhantomRowDetour(void* Chr) {
+    const uint32_t Stock = reinterpret_cast<PhantomRowFn>(g_phantomRowOriginal)(Chr);
+    if (!Chr) return Stock;
+
+    const uintptr_t Here  = reinterpret_cast<uintptr_t>(Chr);
+    const uintptr_t Local = LocalPlayer();
+    if (!Local || Here == Local) return Stock;
+
+    // A player's character carries the same vtable as this player's own; an NPC
+    // does not. That tells the partner apart without calling into the game's
+    // runtime type machinery from a per-frame detour.
+    uintptr_t MyVtbl = 0, ItsVtbl = 0;
+    const bool IsPlayer = ReadPtr(Local, &MyVtbl) && ReadPtr(Here, &ItsVtbl) && MyVtbl == ItsVtbl;
+    if (IsPlayer) {
+        g_partnerChr.store(Here);
+        g_partnerChrAt.store(GetTickCount64());
+    }
+
+    const bool Solid = g_solidEnabled.load() && Session::SessionManager::GetInstance().IsActive();
+
+    static std::atomic<uint32_t> s_logged{ 0 };
+    if (Stock != 0 && s_logged.fetch_add(1) < 40) {
+        uintptr_t Type = 0;
+        int32_t PhantomId = -1;
+        if (ReadPtr(Here + kTypeInChr, &Type)) ReadI32(Type + kPhantomIdInType, &PhantomId);
+        LOG_INFO("[NPC] %p wants phantom row %u (network phantom id %d, %s)%s",
+                 Chr, Stock, PhantomId, IsPlayer ? "a player" : "not a player",
+                 Solid ? " -- answered 0, so it is drawn solid" : "");
+    }
+
+    return Solid ? 0u : Stock;
+}
+
 // Returns a bool in AL; the rest of RAX is passed through untouched.
 uint64_t __fastcall PromptAllowedDetour(void* Chr, const uint8_t* Flags) {
-    const uint64_t Stock = reinterpret_cast<PromptAllowedFn>(g_promptAllowedOriginal)(Chr, Flags);
-    if ((Stock & 0xFF) != 0 || !g_talkEnabled.load()) return Stock;
-    if (reinterpret_cast<uintptr_t>(_ReturnAddress()) != ExeBase() + kPromptEnterRet) return Stock;
-    if (!Chr || reinterpret_cast<uintptr_t>(Chr) != LocalPlayer() || !IsGuestInHostWorld()) return Stock;
-    const uintptr_t Prompt = reinterpret_cast<uintptr_t>(Flags) - kFlagsInPrompt;
-    int32_t Action = 0;
-    if (!ReadI32(Prompt + kActionInPrompt, &Action) || Action != kActionTalk) return Stock;
-    if (g_lastOpenedPrompt.exchange(Prompt) != Prompt) {
-        LOG_INFO("[TALK] talk prompt %p opened for me as a guest (the game turns phantoms down)",
-                 reinterpret_cast<void*>(Prompt));
+    // The phantom id is zeroed for the duration of the call rather than the
+    // answer being overruled afterwards -- see the top of this file for why the
+    // second way cannot work. Only for this player, only from the zone-enter
+    // handler, and only while actually a guest in someone else's world.
+    bool      Mine  = false;
+    uintptr_t Type  = 0;
+    uint8_t   Saved = 0;
+    if (g_talkEnabled.load() && Chr &&
+        reinterpret_cast<uintptr_t>(Chr) == LocalPlayer() &&
+        reinterpret_cast<uintptr_t>(_ReturnAddress()) == ExeBase() + kPromptEnterRet &&
+        IsGuestInHostWorld() &&
+        ReadPtr(reinterpret_cast<uintptr_t>(Chr) + kTypeInChr, &Type)) {
+        __try {
+            uint8_t* Id = reinterpret_cast<uint8_t*>(Type + kPhantomIdInType);
+            Saved = *Id;
+            if (Saved != 0) {
+                *Id = 0;
+                Mine = true;
+            }
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            Mine = false;
+        }
     }
-    return (Stock & ~static_cast<uint64_t>(0xFF)) | 1;
+
+    const uint64_t Answer = reinterpret_cast<PromptAllowedFn>(g_promptAllowedOriginal)(Chr, Flags);
+
+    if (Mine) {
+        __try {
+            *reinterpret_cast<uint8_t*>(Type + kPhantomIdInType) = Saved;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        const uintptr_t Prompt = reinterpret_cast<uintptr_t>(Flags) - kFlagsInPrompt;
+        int32_t Action = -1;
+        ReadI32(Prompt + kActionInPrompt, &Action);
+        if (g_lastOpenedPrompt.exchange(Prompt) != Prompt) {
+            LOG_INFO("[TALK] prompt %p (action %d, %s): asked as a host instead of phantom id %u -> %s",
+                     reinterpret_cast<void*>(Prompt), Action,
+                     Action == kActionTalk ? "talk" : "something else",
+                     static_cast<unsigned>(Saved), (Answer & 0xFF) ? "yes" : "still no");
+        }
+    }
+    return Answer;
 }
 
 // --- probe: a generated character being taken off the map ---------------------
@@ -167,9 +275,24 @@ void __fastcall TakeDownDetour(void* A, void* B, void* C, void* D) {
 
 void SetNpcTalkEnabled(bool on) {
     g_talkEnabled.store(on);
-    LOG_INFO("[TALK] the talk prompt for a guest: %s", on
-             ? "forced open (npc_talk=true)"
-             : "left as the game has it (npc_talk=false)");
+    LOG_INFO("[TALK] a guest asking an NPC for a prompt: %s", on
+             ? "asked as a host would be (npc_talk=true)"
+             : "asked as a phantom, which the game turns down flat (npc_talk=false)");
+}
+
+void SetNpcSolidEnabled(bool on) {
+    g_solidEnabled.store(on);
+    LOG_INFO("[NPC] the world's other characters: %s", on
+             ? "drawn solid (npc_solid=true)"
+             : "as the game draws them for a phantom, see-through (npc_solid=false)");
+}
+
+uintptr_t GetPartnerCharacter(uint64_t maxAgeMs) {
+    const unsigned long long Seen = g_partnerChrAt.load();
+    if (!Seen) return 0;
+    const unsigned long long Now = GetTickCount64();
+    if (Now - Seen > maxAgeMs) return 0;   // stale: a map load throws characters away
+    return g_partnerChr.load();
 }
 
 bool InstallNpcTalk() {
@@ -182,7 +305,14 @@ bool InstallNpcTalk() {
         LOG_WARNING("[TALK] could not hook exe+0x%X -- a guest still cannot talk to NPCs", kPromptAllowed);
         return false;
     }
-    LOG_INFO("[TALK] a guest can talk to NPCs in the host's world (exe+0x453760, talk prompts only)");
+    LOG_INFO("[TALK] a guest is asked about NPC prompts as a host is (exe+0x453760)");
+    if (Hooks::HookManager::GetInstance().InstallHook(reinterpret_cast<void*>(ExeBase() + kPhantomRow),
+                                                      reinterpret_cast<void*>(&PhantomRowDetour),
+                                                      &g_phantomRowOriginal)) {
+        LOG_INFO("[NPC] the world's characters are drawn solid for a guest (exe+0x%X)", kPhantomRow);
+    } else {
+        LOG_WARNING("[NPC] could not hook exe+0x%X -- the world stays see-through", kPhantomRow);
+    }
     if (Hooks::HookManager::GetInstance().InstallHook(reinterpret_cast<void*>(ExeBase() + kTakeDown),
                                                       reinterpret_cast<void*>(&TakeDownDetour),
                                                       &g_takeDownOriginal)) {

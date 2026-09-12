@@ -102,13 +102,20 @@ bool IsProgressSharingOn();
 // at the last bonfire rested at there (or the one nearest to where it arrived);
 // in a boss fight the return waits until the fight is decided or both are dead.
 bool InstallDeathSync(bool enabled);
-// A guest can talk to NPCs in the host's world: the talk prompt turns every
-// phantom down, and is answered "yes" for the local guest (npc_talk.cpp).
+// NPCs for a guest (npc_talk.cpp). Both symptoms -- see-through characters and
+// no prompt to talk -- come out of the same field, the phantom id and its
+// neighbours in the character's PlayerType (docs §3.24).
 bool InstallNpcTalk();
-// Whether that answer is actually forced. Off by default: it produced no prompt
-// at all in two sessions, and a crash reading address 0 came out of the same
-// prompt code (ini npc_talk).
+// The world's other characters drawn solid rather than as ghosts. This also
+// makes the partner solid on the host's screen.
+void SetNpcSolidEnabled(bool on);
+// Whether a guest is asked about an NPC's prompt the way a host is, instead of
+// as a phantom the game turns down before looking at anything else. The answer
+// is cached until the guest leaves and re-enters the NPC's zone (ini npc_talk).
 void SetNpcTalkEnabled(bool on);
+// The partner's character object, as last seen by the code that draws it, or 0
+// if nothing that recent is known. The camera needs it (docs §3.23).
+uintptr_t GetPartnerCharacter(uint64_t maxAgeMs);
 void DeathSyncGameTick();             // game thread, every frame
 void NotePartnerLife(bool alive);     // the partner's own PlayerDeath / PlayerRespawn
 void NotePartnerBoss(int32_t active, int32_t phase);   // the host's boss fight (BossState)
