@@ -8,7 +8,35 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 
 ## 0.1.3 — 2026-09-12
 
+**Added / Добавлено**
+
+- Shared progress, on by default (`flag_sync=on`). Bonfires, fog gates, bosses and picked-up items are all event
+  flags, and they travel both ways now; on top of that the host hands a friend who joins everything it has
+  already done, which the once-a-second diff by itself can never do — a guest joining after five bonfires were
+  lit hears about none of them. This writes into the receiving player's save. That is the point of it, and it is
+  why the whole flag table is written to `ds2_flags_backup.bin` before the first flag is ever applied, why only
+  0→1 is ever sent or accepted, and why `flag_sync=off` still means nobody's save is touched.
+  Общий прогресс, по умолчанию включён (`flag_sync=on`). Костры, туманы, боссы и подобранные предметы — это
+  флаги событий, и теперь они идут в обе стороны; вдобавок хост отдаёт зашедшему другу всё, что уже сделал, —
+  сам дифф раз в секунду этого не умеет в принципе: гость, зашедший после пяти зажжённых костров, не узнает ни
+  об одном. Это запись в сейв второго игрока. В этом и смысл, и поэтому перед первым применением вся таблица
+  флагов сохраняется в `ds2_flags_backup.bin`, поэтому шлётся и принимается только `0→1`, и поэтому
+  `flag_sync=off` по-прежнему означает, что сейвы никто не трогает.
+
 **Fixed / Исправлено**
+
+- Flag syncing had never sent a single flag, and two of its own guards were the reason. A group that reads empty
+  while the game rebuilds the table used to abort the whole pass **before** the baseline was replaced, so after
+  the first occurrence nothing was ever compared again — 994 such lines in the guest's log, 541 in the host's.
+  And any pass with more than eight changed flags was discarded as implausible, which is one bonfire, one fog
+  gate or one area load. Now only the empty group drops out of the diff, keeping the bytes it had, and the
+  ceiling is 256 — safe, because the only thing ever sent is a bit this game's own table reads as set.
+  Синхронизация флагов не отправила ни одного флага, и виноваты были две её же защиты. Группа, читающаяся
+  пустой в момент пересборки таблицы, прерывала весь пасс **до** замены базовой линии, поэтому после первого
+  раза сравнивать было уже не с чем — 994 такие строки в логе гостя, 541 в логе хоста. А любой пасс, где
+  изменилось больше восьми флагов, выбрасывался как невозможный — это один костёр, один туман или загрузка
+  области. Теперь из диффа выпадает только пустая группа, сохраняя свои прежние байты, а предел равен 256 — это
+  безопасно, потому что отправляется только тот бит, который в нашей же таблице стоит единицей.
 
 - Majula, and this time with the cause named. The origin that a sign's coordinates are measured against was
   taken from the mod's own file, where Majula sat as (10.53, 5.92, -16.25) — not an origin at all, but the

@@ -484,6 +484,16 @@ bool WriteFlag(uint32_t Id, bool Value) {
     return Changed;
 }
 
+// The same write without a line in the log: handing over a whole save's worth of
+// progress is thousands of flags, and one line each would drown everything else.
+bool WriteFlagQuiet(uint32_t Id, bool Value) {
+    const uintptr_t ExeBase = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+    const uintptr_t Mgr = GetFlagManager();
+    if (!Mgr) return false;
+    auto Fn = reinterpret_cast<SetFlagFn>(ExeBase + 0x4750B0);
+    return Fn(reinterpret_cast<void*>(Mgr), Id, Value ? 1 : 0) != 0;
+}
+
 // Copy every group's bit array out of the hash table.
 std::map<uint32_t, std::vector<uint8_t>> CaptureFlags() {
     std::map<uint32_t, std::vector<uint8_t>> Out;
@@ -575,20 +585,29 @@ void SnapshotFlags() {
 // each other forever.
 //
 // This writes into the receiving player's own game state, and that state is
-// saved. It is therefore off unless the ini asks for it:
+// saved. Asked for on 12.09 with that said plainly, so it is on by default now:
 //
-//   flag_sync=off   nothing happens
-//   flag_sync=log   changes are detected and logged, nothing is sent or applied
 //   flag_sync=on    changes are broadcast, and flags from peers are applied
+//   flag_sync=off   nothing happens
 //
-// "log" is the default so the diff can be watched in a real session before
-// anything touches a save.
+// The whole table is written to ds2_flags_backup.bin before the first thing is
+// ever applied, so a save that comes out wrong can be compared against what it
+// held. "log" is still accepted and means on: it was the old default, and
+// leaving it meaning "watch only" would have left both players editing an ini by
+// hand for the feature they asked for.
 // ---------------------------------------------------------------------------
 enum class FlagSyncMode { Off, Log, On };
-std::atomic<int> g_flagSyncMode{ static_cast<int>(FlagSyncMode::Log) };
+std::atomic<int> g_flagSyncMode{ static_cast<int>(FlagSyncMode::On) };
 
 std::mutex                          g_flagSyncMutex;
 std::map<uint32_t, std::vector<uint8_t>> g_flagBaseline;
+// Flags that arrived from the other player, waiting to be written.
+//
+// They are NOT written where they arrive: that is the network thread, and
+// calling one of the game's own functions off the game's thread is what crashed
+// an earlier attempt at replaying a bonfire rest. The tick below drains this on
+// the game thread instead.
+std::vector<std::pair<uint32_t, bool>> g_pendingRemoteFlags;
 ULONGLONG                           g_flagLastTick = 0;
 bool                                g_flagBackedUp = false;
 
@@ -628,6 +647,36 @@ void BackupFlagsOnce(const std::map<uint32_t, std::vector<uint8_t>>& Flags) {
     LOG_INFO("[FLAGS] backup written: ds2_flags_backup.bin (%zu groups, %zu bytes)", Flags.size(), bytes);
 }
 
+// Once per connection, the host hands the guest everything it has already done.
+//
+// The diff below only ever reports what changes while both players are
+// connected, so a guest that joins after the host has lit five bonfires, opened
+// three fog gates and killed a boss hears about none of it -- which is exactly
+// what the 12.09 session looked like. Host to guest only: this dumps a whole
+// save's worth of flags, and giving the host's world to the guest is what was
+// asked for.
+void MaybeHandOverProgress() {
+    static size_t s_handedOverFor = 0;
+
+    auto& Lobby = DS2Coop::Session::SessionManager::GetInstance();
+    const size_t Peers = DS2Coop::Network::PeerManager::GetInstance().GetPeers().size();
+    if (!Lobby.IsActive() || !Lobby.IsHost() || Peers == 0) {
+        if (Peers == 0) s_handedOverFor = 0;   // a later session hands over again
+        return;
+    }
+    if (Peers <= s_handedOverFor) return;
+
+    bool HaveTable;
+    {
+        std::lock_guard<std::mutex> Lock(g_flagSyncMutex);
+        HaveTable = !g_flagBaseline.empty();
+    }
+    if (!HaveTable) return;                    // the flag table is not up yet
+
+    s_handedOverFor = Peers;
+    SendFlagCatchUp();
+}
+
 void SendFlagToPeers(uint32_t Id, bool Value) {
     DS2Coop::Network::EventFlagPacket Packet{};
     Packet.header.magic = 0x44533243;
@@ -664,6 +713,44 @@ void FlagSyncTick() {
     if (Now - g_flagLastTick < 1000) return;
     g_flagLastTick = Now;
 
+    // Flags from the other player, written here -- on the game's own thread,
+    // before the capture below, so that capture already contains them and the
+    // diff does not send them straight back.
+    //
+    // Only once a baseline exists: the baseline is what absorbs a written flag,
+    // and taking it is also what writes the backup file. And bounded per pass,
+    // because a catch-up hands over a whole save's worth of progress at once and
+    // every write the game accepts notifies its listeners -- fog, doors and
+    // bonfires all react on the spot.
+    {
+        constexpr size_t kWritesPerTick = 400;
+        std::lock_guard<std::mutex> Lock(g_flagSyncMutex);
+        if (!g_flagBaseline.empty() && !g_pendingRemoteFlags.empty()) {
+            size_t Taken = 0, Written = 0, Foreign = 0;
+            while (Taken < kWritesPerTick && Taken < g_pendingRemoteFlags.size()) {
+                const std::pair<uint32_t, bool> F = g_pendingRemoteFlags[Taken++];
+                if (!F.second) continue;                  // set only, never clear
+                // A group this save does not have is not ours to invent: the
+                // setter would be asked for a bucket that is not there.
+                auto Group = g_flagBaseline.find(F.first / 10000);
+                if (Group == g_flagBaseline.end() ||
+                    static_cast<size_t>((F.first % 10000) / 8) >= Group->second.size()) {
+                    ++Foreign;
+                    continue;
+                }
+                if (WriteFlagQuiet(F.first, true)) ++Written;
+                AbsorbIntoBaseline(F.first, true);
+            }
+            g_pendingRemoteFlags.erase(g_pendingRemoteFlags.begin(),
+                                       g_pendingRemoteFlags.begin() + Taken);
+            LOG_INFO("[FLAGSYNC] wrote %zu flag(s) from the other player (%zu changed something here, "
+                     "%zu in a group this save does not have), %zu still queued",
+                     Taken, Written, Foreign, g_pendingRemoteFlags.size());
+        }
+    }
+
+    MaybeHandOverProgress();
+
     auto Current = CaptureFlags();
     if (Current.empty()) return;
 
@@ -676,11 +763,33 @@ void FlagSyncTick() {
         for (const auto& g : g_flagBaseline) bytes += g.second.size();
         LOG_INFO("[FLAGSYNC] watching %zu groups (%zu bytes), mode=%s",
                  g_flagBaseline.size(), bytes, Mode == FlagSyncMode::On ? "on" : "log");
+        // Which groups exist at all: the flag id of anything in group N is
+        // N*10000 + 0..9999, so this says what can be synced and what cannot.
+        {
+            char Groups[400];
+            int Used = snprintf(Groups, sizeof(Groups), "[FLAGSYNC] groups:");
+            for (const auto& g : g_flagBaseline) {
+                if (Used >= static_cast<int>(sizeof(Groups)) - 24) break;
+                Used += snprintf(Groups + Used, sizeof(Groups) - Used, " %u(%zu B, ids %u-%u)",
+                                 g.first, g.second.size(), g.first * 10000,
+                                 g.first * 10000 + static_cast<uint32_t>(g.second.size()) * 8 - 1);
+            }
+            LOG_INFO("%s", Groups);
+        }
         return;
     }
 
-    // A group that had bits set and now reads completely empty is the table
-    // being rebuilt, not a world where everything was undone at once.
+    // A group that had bits set and now reads completely empty is the table being
+    // rebuilt, not a world where everything was undone at once.
+    //
+    // Skipping the whole pass for it was a mistake, and a fatal one: on 12.09
+    // group 20 read empty on every pass for minutes (994 such lines in the
+    // guest's session, 541 in the host's), and because the pass returned before
+    // the baseline was replaced, nothing was ever compared again -- flag sync was
+    // dead for the rest of the session. That is why it "never had any visible
+    // effect". Now only that one group is left out, with its old bytes kept, and
+    // every other group is compared as usual.
+    std::vector<uint32_t> Stale;
     for (const auto& g : Current) {
         auto Prev = g_flagBaseline.find(g.first);
         if (Prev == g_flagBaseline.end() || Prev->second.size() != g.second.size()) continue;
@@ -690,9 +799,17 @@ void FlagSyncTick() {
             if (g.second[i]) { NowEmpty = false; break; }
             if (Prev->second[i]) WasSet = true;
         }
-        if (NowEmpty && WasSet) {
-            LOG_DEBUG("[FLAGSYNC] group %u read empty — table rebuild, skipping this pass", g.first);
-            return;   // keep the old baseline; the next pass sees the real table
+        if (NowEmpty && WasSet) Stale.push_back(g.first);
+    }
+    {
+        static std::map<uint32_t, bool> s_toldAbout;   // one line per group, not one per second
+        for (uint32_t Group : Stale) {
+            if (s_toldAbout.find(Group) == s_toldAbout.end()) {
+                s_toldAbout[Group] = true;
+                LOG_INFO("[FLAGSYNC] group %u reads empty -- keeping the bits it had and leaving it out of the diff",
+                         Group);
+            }
+            Current[Group] = g_flagBaseline[Group];
         }
     }
 
@@ -716,9 +833,18 @@ void FlagSyncTick() {
         }
     }
 
-    constexpr size_t kPlausibleBurst = 8;
+    // Eight was far too low, and it was the second thing killing this feature:
+    // one bonfire, one fog gate or one area load moves more flags than that at
+    // once, and every such pass was thrown away without sending anything.
+    //
+    // A high ceiling is safe because of what is sent: only bits that read as set
+    // in this game's own table, and only in the 0->1 direction. Even a pass that
+    // really is a rebuild can therefore do no worse than tell the other player
+    // about progress this save genuinely has. The cap that is left is there to
+    // keep one pass from turning into a thousand packets.
+    constexpr size_t kPlausibleBurst = 256;
     if (Changes.size() > kPlausibleBurst) {
-        LOG_INFO("[FLAGSYNC] %zu flags moved at once — treating as a table rebuild, re-baselining",
+        LOG_INFO("[FLAGSYNC] %zu flags moved at once -- too many for one pass, re-baselining instead",
                  Changes.size());
         g_flagBaseline = std::move(Current);
         return;
@@ -2588,26 +2714,85 @@ bool ApplyRemoteEventFlag(uint32_t Id, bool Value) {
         return false;
     }
 
+    // Queued, not written: this runs on the network thread. The tick writes it.
     std::lock_guard<std::mutex> Lock(g_flagSyncMutex);
-
-    if (ReadFlag(Id) == Value) return true;   // already agrees, nothing to do
-
-    const bool Ok = WriteFlag(Id, Value);
-    if (Ok) AbsorbIntoBaseline(Id, Value);
-
-    LOG_INFO("[FLAGSYNC] remote flag %u=%d %s", Id, Value ? 1 : 0, Ok ? "applied" : "REJECTED");
-    return Ok;
+    AbsorbIntoBaseline(Id, Value);   // so the diff does not send it straight back
+    g_pendingRemoteFlags.emplace_back(Id, Value);
+    LOG_INFO("[FLAGSYNC] remote flag %u=%d queued", Id, Value ? 1 : 0);
+    return true;
 }
 
-// off / log / on, straight from the ini.
+// Everything this player already has set, group by group, for someone who has
+// just joined. The diff above only reports what changes while both are
+// connected, so without this the guest never learns about the bonfires, fog
+// gates and bosses the host cleared long before.
+void SendFlagCatchUp() {
+    if (static_cast<FlagSyncMode>(g_flagSyncMode.load()) != FlagSyncMode::On) return;
+    auto Flags = CaptureFlags();
+    if (Flags.empty()) {
+        LOG_INFO("[FLAGSYNC] nothing to hand over yet (the flag table is not up)");
+        return;
+    }
+    int Groups = 0;
+    size_t Set = 0;
+    for (const auto& G : Flags) {
+        DS2Coop::Network::FlagBulkPacket Packet{};
+        Packet.header.magic = 0x44533243;
+        Packet.header.type = DS2Coop::Network::PacketType::FlagBulk;
+        Packet.header.size = sizeof(Packet);
+        Packet.header.timestamp = GetTickCount64();
+        Packet.group = G.first;
+        Packet.bytes = static_cast<uint32_t>(G.second.size() < sizeof(Packet.bits) ? G.second.size()
+                                                                                   : sizeof(Packet.bits));
+        memcpy(Packet.bits, G.second.data(), Packet.bytes);
+        for (uint32_t I = 0; I < Packet.bytes; I++) {
+            for (int Bit = 0; Bit < 8; Bit++) {
+                if (Packet.bits[I] & (1 << Bit)) ++Set;
+            }
+        }
+        DS2Coop::Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
+        ++Groups;
+    }
+    LOG_INFO("[FLAGSYNC] handed over what is already done: %d group(s), %zu flag(s) set", Groups, Set);
+}
+
+void NoteRemoteFlagBulk(uint32_t group, const uint8_t* bits, uint32_t bytes) {
+    if (!bits || !bytes) return;
+    if (static_cast<FlagSyncMode>(g_flagSyncMode.load()) != FlagSyncMode::On) {
+        LOG_DEBUG("[FLAGSYNC] ignoring a group of %u flags (flag_sync is not on)", bytes * 8);
+        return;
+    }
+    size_t Queued = 0;
+    {
+        std::lock_guard<std::mutex> Lock(g_flagSyncMutex);
+        for (uint32_t I = 0; I < bytes; I++) {
+            if (!bits[I]) continue;
+            for (int Bit = 0; Bit < 8; Bit++) {
+                if (!(bits[I] & (1 << Bit))) continue;
+                const uint32_t Id = group * 10000 + I * 8 + static_cast<uint32_t>(7 - Bit);
+                AbsorbIntoBaseline(Id, true);
+                g_pendingRemoteFlags.emplace_back(Id, true);
+                ++Queued;
+            }
+        }
+    }
+    LOG_INFO("[FLAGSYNC] group %u from the other player: %zu flag(s) queued to be set here", group, Queued);
+}
+
+// off / on, straight from the ini.
+//
+// "log" used to mean "watch and report, write nothing", and it was the default.
+// Restez asked for progress sharing on 12.09 knowing it writes into the other
+// player's save, so "log" now means on as well: leaving it as a separate mode
+// would have meant both players editing their ini by hand for the feature they
+// asked for. Only "off" turns it off.
 void SetFlagSyncMode(const std::string& Mode) {
-    FlagSyncMode Parsed = FlagSyncMode::Log;
-    if (Mode == "on")       Parsed = FlagSyncMode::On;
-    else if (Mode == "off") Parsed = FlagSyncMode::Off;
+    FlagSyncMode Parsed = FlagSyncMode::On;
+    if (Mode == "off" || Mode == "false" || Mode == "0") Parsed = FlagSyncMode::Off;
     g_flagSyncMode.store(static_cast<int>(Parsed));
     LOG_INFO("[FLAGSYNC] mode = %s%s", Mode.c_str(),
              Parsed == FlagSyncMode::On
-                 ? " — flags from other players will be written into this save"
+                 ? " -- progress from the other player is written into this save (and backed up first)"
                  : " (nothing is written into this save)");
 }
 

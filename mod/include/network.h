@@ -51,6 +51,11 @@ enum class PacketType : uint8_t {
     // still written in its own map's frame, landed off the map and died on
     // arrival, twice in a row (session_hooks.cpp).
     MapOriginInfo = 0x38,
+    // Every event flag this player already has set, one group at a time. The
+    // flag diff only carries what changes during a session, so without this a
+    // guest never hears about the bonfires, fog gates and bosses the host
+    // cleared before it joined. Sent once per join, applied set-only.
+    FlagBulk = 0x3B,
     // Every bonfire this player has lit. The game syncs a session's bonfires
     // itself, but only for the map the players are in and at most sixteen of
     // them: measured on 12.09, the host had five lit and the set the guest's
@@ -151,6 +156,16 @@ struct BonfireListPacket {
     PacketHeader header;
     uint32_t     count;          // how many entries are filled
     BonfireEntry entries[256];   // a save holds well under this (77 records measured)
+};
+
+// One group of the event-flag table: flag id = group * 10000 + bit index, and
+// inside each byte the game counts bits from the top (bit of id N is
+// 1 << (7 - N % 8)). Measured 12.09: five groups, 2575 bytes in all.
+struct FlagBulkPacket {
+    PacketHeader header;
+    uint32_t     group;
+    uint32_t     bytes;      // how many of the array below are filled
+    uint8_t      bits[640];
 };
 #pragma pack(pop)
 

@@ -86,6 +86,13 @@ void SetBossFogWait(bool on);
 // saved, so the guest's own progress is untouched.
 void NotePartnerBonfires(const void* entries, uint32_t count);
 
+// Progress already made, handed over once when a session starts (packet
+// FlagBulk). The flag diff only reports what changes while both are connected,
+// so a guest joining later would never learn about the host's bonfires, fog
+// gates and bosses. Set-only, and written on the game's own thread.
+void SendFlagCatchUp();
+void NoteRemoteFlagBulk(uint32_t group, const uint8_t* bits, uint32_t bytes);
+
 // Deaths in co-op (death_sync.cpp). A guest who dies -- or whose host dies --
 // goes home the game's way and is brought straight back to the partner's world,
 // at the last bonfire rested at there (or the one nearest to where it arrived);

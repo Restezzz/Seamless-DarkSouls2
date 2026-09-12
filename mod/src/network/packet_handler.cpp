@@ -75,6 +75,13 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
             }
             break;
 
+        case PacketType::FlagBulk:
+            if (packet->size >= sizeof(FlagBulkPacket)) {
+                const auto* Bulk = reinterpret_cast<const FlagBulkPacket*>(packet);
+                DS2Coop::Sync::NoteRemoteFlagBulk(Bulk->group, Bulk->bits, Bulk->bytes);
+            }
+            break;
+
         case PacketType::BonfireList:
             if (packet->size >= sizeof(BonfireListPacket)) {
                 const auto* List = reinterpret_cast<const BonfireListPacket*>(packet);

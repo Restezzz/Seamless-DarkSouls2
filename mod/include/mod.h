@@ -27,9 +27,12 @@ struct ModConfig {
     bool sync_bonfires = true;
     bool sync_items = true;
     bool sync_enemies = false;
-    // off / log / on. Writes into the local save, so it starts at "log":
-    // changes are detected and logged, but nothing is sent or applied.
-    std::string flag_sync = "log";
+    // on / off. Progress sharing: lit bonfires, opened fog gates, defeated
+    // bosses and collected items are event flags, and with this on they are
+    // shared both ways, plus the host hands a joining guest everything it has
+    // already done. This writes into the receiving player's save (backed up to
+    // ds2_flags_backup.bin first). On by default since 0.1.3.
+    std::string flag_sync = "on";
     // Put an incoming summon sign under the receiving player's feet instead of
     // where it was placed. On by default: it removes the walk to the sign and
     // is the groundwork for summoning without the ritual.

@@ -25,6 +25,22 @@ function Set-WindowsLineEndings([string]$path) {
     [IO.File]::WriteAllText($path, $text, (New-Object Text.UTF8Encoding($hasBom)))
 }
 
+# The archives are built from release\host and release\joiner, so the DLL sitting
+# in those folders is what ships -- copying the fresh build in was a manual step,
+# and on 12.09 it was missed: the archives were packed with the previous build's
+# DLL while their ini already said 0.1.3. The friend's download link would have
+# carried a binary without any of the fixes. Not a manual step any more.
+$built = Join-Path $root 'mod\build\bin\Release\dinput8.dll'
+if (Test-Path -LiteralPath $built) {
+    foreach ($kind in 'host', 'joiner') {
+        Copy-Item -LiteralPath $built -Destination (Join-Path $root "release\$kind\dinput8.dll") -Force
+    }
+    $dll = Get-Item -LiteralPath $built
+    'dinput8.dll  {0:N0} bytes, built {1:HH:mm:ss}' -f $dll.Length, $dll.LastWriteTime
+} else {
+    Write-Warning "no built DLL at $built -- packing whatever release\host and release\joiner already hold"
+}
+
 foreach ($kind in 'host', 'joiner') {
     $source = Join-Path $root "release\$kind"
     $stage = Join-Path ([IO.Path]::GetTempPath()) "seamless_package_$kind"
