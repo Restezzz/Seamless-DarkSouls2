@@ -80,6 +80,8 @@ constexpr uint32_t kLastBonfire    = 0x44FE30;    // (EventManager*, {map, kind,
 constexpr uint32_t kRequestWarp    = 0x1C2A80;    // GMImp::RequestWarp(GMImp*, request*, multiplayer warp)
 constexpr uint32_t kMpWarpNotice   = 0x2C7EC0;    // (mp, kind): the host's warp, reason 4 to every guest
 constexpr uint32_t kJoinLeave      = 0x2C2F20;    // join controller slot A0 (ctrl, reason): leave
+constexpr uint32_t kResultSequence = 0x18F9C0;    // (EventResult*, out, arg3, code*, row*): builds the job chain
+constexpr uint32_t kPhantomParam   = 0x16F540;    // (phantom type) -> that type's param row ([GMImp+0x18] lookup)
 
 constexpr int       kJoinInWorld        = 7;      // join controller state: in the host's world
 constexpr ULONGLONG kRejoinSettleMs     = 3000;   // home and alive this long before joining again
@@ -99,6 +101,8 @@ using BonfireFn = void(__fastcall*)(void*, const int32_t*);
 using WarpFn    = uint64_t(__fastcall*)(void*, const int32_t*, uint64_t);
 using NoticeFn  = void(__fastcall*)(void*, int);
 using LeaveFn   = void(__fastcall*)(void*, int);
+using SeqFn     = void*(__fastcall*)(void*, void*, void*, const int*, const uint8_t*);
+using ParamRowFn = void*(__fastcall*)(uint32_t);
 
 // Set by MH_CreateHook before the hook goes live, so a detour never sees null.
 void* g_phantomBranchOriginal = nullptr;
@@ -107,6 +111,7 @@ void* g_lastBonfireOriginal   = nullptr;
 void* g_requestWarpOriginal   = nullptr;
 void* g_mpNoticeOriginal      = nullptr;
 void* g_joinLeaveOriginal     = nullptr;
+void* g_resultSeqOriginal     = nullptr;
 
 std::atomic<bool>      g_enabled{ true };
 std::atomic<bool>      g_partnerAlive{ true };     // from the partner's PlayerDeath / PlayerRespawn
@@ -444,6 +449,86 @@ void __fastcall JoinLeaveDetour(void* Ctrl, int Reason) {
     LOG_INFO("[DEATH] join controller asked to leave: reason %d, state %d (from exe+0x%llX)",
              Reason, ReadJoinState(), static_cast<unsigned long long>(Caller - ExeBase()));
     reinterpret_cast<LeaveFn>(g_joinLeaveOriginal)(Ctrl, Reason);
+}
+
+// Read-only probe: what the game is about to do after this death.
+//
+// The sequence is not hard-coded. exe+0x18F830 looks up a row of 24 bytes by
+// "phantom type + code * 100" (falling back to "code * 100 + 99") and this
+// function turns that row into a chain of jobs. The constructors name their own
+// classes: exe+0x190FA0 is EventResultJob::WaitJob, whose length comes from the
+// dying phantom type's param row at +0x28; exe+0x190DF0 is
+// ChargeVowContributeJob (row byte 2); exe+0x18F1A0 is the functor job that
+// finally hands the phantom to exe+0x2C9220 and sends it home. Two more are
+// built from row byte 0, row byte 1 with the dword at +4, and -- through
+// exe+0x18FF20 -- one of the dwords at +8 or +0xC with the flag at +0x10.
+//
+// The banner a guest sees on dying is the MessageInfo job: exe+0x190160 pairs a
+// WaitJob with FeFunctorJob<JOB_MEMBER_FUNCTOR_ARG1<EventResult,
+// EventResult::MessageInfo, void>> and builds it ONLY when row byte 1 is
+// non-zero. Byte 1 also chooses how the text is shown and the dword at +4 is the
+// text id: 1 plain text (exe+0x2D6BF0), 2 and 3 text with a player's name
+// (exe+0x2D6C50 / exe+0x2D6D30). That one byte is read in exactly one place,
+// which is what makes clearing it safe.
+//
+// The row is still printed on every death: it is what the fix below acts on, and
+// nobody has seen one from a live session yet.
+void* __fastcall ResultSeqDetour(void* Result, void* Out, void* Arg3, const int* Code, const uint8_t* Row) {
+    __try {
+        if (Row && Code) {
+            static const char Hex[] = "0123456789ABCDEF";
+            char Bytes[24 * 3 + 1];
+            for (int I = 0; I < 24; ++I) {
+                Bytes[I * 3 + 0] = Hex[Row[I] >> 4];
+                Bytes[I * 3 + 1] = Hex[Row[I] & 0xF];
+                Bytes[I * 3 + 2] = ' ';
+            }
+            Bytes[24 * 3] = '\0';
+
+            const uint8_t Type = Result
+                ? *reinterpret_cast<const uint8_t*>(reinterpret_cast<uintptr_t>(Result) + 0xE0)
+                : 0xFF;
+            uint32_t Wait = 0;
+            void* ParamRow = reinterpret_cast<ParamRowFn>(ExeBase() + kPhantomParam)(Type);
+            if (ParamRow) Wait = *reinterpret_cast<const uint32_t*>(reinterpret_cast<uintptr_t>(ParamRow) + 0x28);
+
+            LOG_INFO("[DEATH] result sequence: code %d, phantom type %u, wait param %u, row %s",
+                     *Code, static_cast<unsigned>(Type), Wait, Bytes);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LOG_WARNING("[DEATH] reading the result row threw -- leaving it alone");
+    }
+
+    // "You were defeated, returning to your world" -- while the mod is keeping
+    // this guest in the host's world, that message is simply false (12.09: the
+    // guest died at a boss, read it, and stayed where it was). Clearing row byte
+    // 1 in a copy leaves out the message job and nothing else: the return home
+    // hangs off byte 3, the reward off the dwords at +8/+0xC.
+    //
+    // Only when the mod really is going to hold, because anywhere else the
+    // message is true. The predicate is the one PhantomBranchDetour uses for the
+    // same decision -- both run on the same death, so they see the same state.
+    uint8_t Copy[24];
+    const uint8_t* Use = Row;
+    if (Row && Row[1]) {
+        const int     Join = ReadJoinState();
+        const int32_t Hp   = ReadLocalHp();
+        int32_t BossActive = 0, BossPhase = 0;
+        ReadBoss(&BossActive, &BossPhase);
+        const bool Guest    = Join == kJoinInWorld;
+        const bool InBoss   = (BossActive > 0 && BossPhase == 1) || (Guest && PartnerBossFight());
+        const bool OwnDeath = IsDead(Hp);
+        const bool HoldBack = g_enabled.load() && Guest && InBoss &&
+                              (OwnDeath ? g_partnerAlive.load() : IsAlive(Hp));
+        if (HoldBack) {
+            for (int I = 0; I < 24; ++I) Copy[I] = Row[I];
+            Copy[1] = 0;
+            Use = Copy;
+            LOG_INFO("[DEATH] held in the host's world -- leaving out the game's defeat message "
+                     "(row byte 1 was %u)", static_cast<unsigned>(Row[1]));
+        }
+    }
+    return reinterpret_cast<SeqFn>(g_resultSeqOriginal)(Result, Out, Arg3, Code, Use);
 }
 
 bool HookAt(uint32_t Rva, void* Detour, void** Original, const char* What) {
@@ -860,6 +945,7 @@ bool InstallDeathSync(bool Enabled) {
         HookAt(kRequestWarp, reinterpret_cast<void*>(&RequestWarpDetour), &g_requestWarpOriginal, "warp request");
         HookAt(kMpWarpNotice, reinterpret_cast<void*>(&MpWarpNoticeDetour), &g_mpNoticeOriginal, "host warp notice");
         HookAt(kJoinLeave, reinterpret_cast<void*>(&JoinLeaveDetour), &g_joinLeaveOriginal, "join controller leave");
+        HookAt(kResultSequence, reinterpret_cast<void*>(&ResultSeqDetour), &g_resultSeqOriginal, "death result sequence");
     }
     LOG_INFO("[DEATH] death handling %s", Enabled ? "ON: back in the partner's world after a death, boss fights wait for both"
                                                   : "off (death_respawn=false): the game's own way, probes only");
