@@ -123,6 +123,39 @@ uint64_t __fastcall PromptAllowedDetour(void* Chr, const uint8_t* Flags) {
     return (Stock & ~static_cast<uint64_t>(0xFF)) | 1;
 }
 
+// --- probe: a generated character being taken off the map ---------------------
+// If the NPCs are not simply never put in but put in and then removed, that goes
+// through exe+0x40F300 -> exe+0x415E70([GMImp+0x40], status, 0, 0) ->
+// exe+0x419460 -> exe+0x40FDB0(status, 1) -- the tail of the generator's
+// group-mask culling (exe+0x419D50, mask test exe+0x41EEE0). This only watches:
+// it logs the first take-downs with the caller, so "never there" and "taken
+// away again" can be told apart in a single session. exe+0x40F300 begins with
+// MOV [RSP+0x18],RBX, five whole bytes, and the call is rare -- it fires on a
+// removal, not every frame.
+constexpr uint32_t kTakeDown = 0x40F300;
+using TakeDownFn = void(__fastcall*)(void*, void*, void*, void*);
+void* g_takeDownOriginal = nullptr;
+std::atomic<uint32_t> g_takeDowns{ 0 };
+
+// The appear/disappear state of a generated character's status (+0x76, 2 bits).
+int ReadAppearState(const void* Status) {
+    __try {
+        return *reinterpret_cast<const uint8_t*>(reinterpret_cast<uintptr_t>(Status) + 0x76) & 3;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
+void __fastcall TakeDownDetour(void* A, void* B, void* C, void* D) {
+    const uint32_t Count = g_takeDowns.fetch_add(1) + 1;
+    if (Count <= 20 || Count % 500 == 0) {
+        LOG_INFO("[NPC] a generated character is being taken off the map (#%u): %p, %p, appear state %d (from exe+0x%llX)",
+                 Count, A, B, ReadAppearState(B),
+                 static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(_ReturnAddress()) - ExeBase()));
+    }
+    reinterpret_cast<TakeDownFn>(g_takeDownOriginal)(A, B, C, D);
+}
+
 } // namespace
 
 bool InstallNpcTalk() {
@@ -136,6 +169,13 @@ bool InstallNpcTalk() {
         return false;
     }
     LOG_INFO("[TALK] a guest can talk to NPCs in the host's world (exe+0x453760, talk prompts only)");
+    if (Hooks::HookManager::GetInstance().InstallHook(reinterpret_cast<void*>(ExeBase() + kTakeDown),
+                                                      reinterpret_cast<void*>(&TakeDownDetour),
+                                                      &g_takeDownOriginal)) {
+        LOG_INFO("[NPC] watching generated characters being taken off the map (exe+0x%X)", kTakeDown);
+    } else {
+        LOG_WARNING("[NPC] could not watch exe+0x%X (characters taken off the map)", kTakeDown);
+    }
     return true;
 }
 

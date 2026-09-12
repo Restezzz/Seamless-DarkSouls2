@@ -259,6 +259,16 @@ constexpr size_t kCrossedFogSlots = 8;
 std::atomic<uint32_t> g_crossedFog[kCrossedFogSlots] = {};
 std::atomic<size_t>   g_crossedFogNext{ 0 };
 
+// Should a boss fog make the guest wait for the other player at all?
+//
+// 0.1.0 let a guest walk into any boss fog. 0.1.1 turned it into a wall until
+// the host was inside, because a guest who went in first found the boss standing
+// idle -- and that locked both players out whenever the host was waiting at the
+// fog for the guest, which is worse than an idle boss by a wide margin. So
+// waiting is an option now and not the rule: off by default, the fog behaves for
+// a guest exactly as it does in a solo game.
+std::atomic<bool> g_bossFogWait{ false };
+
 bool FogCrossed(uint32_t Flag) {
     if (!Flag) return false;
     for (const auto& Slot : g_crossedFog) {
@@ -366,10 +376,12 @@ uint64_t __fastcall DoorStateDetour(void* Door) {
     if ((Stock == 2 || Stock == 3) && GroupPatched(kDoorSites, _countof(kDoorSites))) {
         DoorInfo Info{};
         if (ReadDoor(reinterpret_cast<uintptr_t>(Door), &Info) && Info.Kind == 1) {
-            if (IsGuestInWorld()) {
+            if (IsGuestInWorld() && g_bossFogWait.load()) {
+                // Only when waiting is asked for. Otherwise the state stays the
+                // game's own -- fog with a prompt, the way it was in 0.1.0.
                 const bool Open = Stock == 3 || FogCrossed(Info.Flag) || IsHostInBossFight();
                 Result = (Result & ~static_cast<uint64_t>(0xFF)) | (Open ? 0u : 4u);   // 0 open, 4 wall
-            } else if (Stock == 3) {
+            } else if (!IsGuestInWorld() && Stock == 3) {
                 TellPartnerAboutFog(Info.Flag);
             }
         }
@@ -468,6 +480,13 @@ bool InstallFreeTravel(bool Enabled) {
     LOG_INFO("[TRAVEL] free travel %s -- applied on the game thread once the world runs",
              Enabled ? "requested" : "off (free_travel=false)");
     return true;
+}
+
+void SetBossFogWait(bool on) {
+    g_bossFogWait.store(on);
+    LOG_INFO("[TRAVEL] boss fog for a guest: %s", on
+             ? "waits for the other player to go in first (boss_fog_wait=true)"
+             : "open, as the game has it for a host (boss_fog_wait=false)");
 }
 
 void NoteHostCrossedBossFog(uint32_t flag) {

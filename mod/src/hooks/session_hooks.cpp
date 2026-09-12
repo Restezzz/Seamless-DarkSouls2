@@ -325,6 +325,95 @@ static void SaveMapOrigins() {
     fclose(f);
 }
 
+// The game's own per-map origin, out of the map data itself.
+//
+// exe+0x2A9E70(onlineAreaId, in[4], out[4]) writes in - origin and answers 0
+// when it cannot resolve the area; the origin it subtracts lives at
+// *(area+0x148)+0x2F0..0x2F8 as three floats. Called with a zero vector it
+// therefore hands back -origin, and it needs nothing but the area id.
+//
+// None of that is taken on faith. Before it is used for a map nobody has stood
+// in, it is asked for the two maps measured by hand and is only trusted if it
+// reproduces both within 0.1 -- the 16-bit field on the wire has a step of
+// 1/32, so anything closer than that is the same number. The comparison happens
+// in the game, with real numbers, and goes into the log either way.
+//
+// Game thread only (the sign tick and the sign creation): it walks the map
+// manager. The packet from the other player never comes through here.
+constexpr uint32_t kMapOriginQuery = 0x2A9E70;
+using MapOriginQueryFn = uint8_t(__fastcall*)(uint32_t, const float*, float*);
+
+static std::atomic<int> g_gameOriginTrust{ 0 };   // 0 not checked yet, 1 trusted, -1 no
+
+static bool QueryGameMapOrigin(uint32_t area, MapOrigin* out) {
+    if (!area || !out) return false;
+    __try {
+        const float in[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        float got[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+        const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+        if (!reinterpret_cast<MapOriginQueryFn>(base + kMapOriginQuery)(area, in, got)) return false;
+        for (int i = 0; i < 3; i++) {
+            if (!(got[i] == got[i]) || got[i] > 1.0e6f || got[i] < -1.0e6f) return false;
+        }
+        out->x = -got[0];
+        out->y = -got[1];
+        out->z = -got[2];
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+static void CheckGameOriginOnce() {
+    if (g_gameOriginTrust.load() != 0) return;
+    struct Known { uint32_t Area; float X, Y, Z; };
+    static const Known known[] = {
+        { 10310000u, -13.98f, -15.02f, 163.02f },
+        { 10100000u, 207.99f,  10.00f, -133.02f },
+    };
+    int matched = 0;
+    for (const Known& k : known) {
+        MapOrigin got{};
+        if (!QueryGameMapOrigin(k.Area, &got)) return;   // not in a world yet: ask again later
+        const bool ok = fabsf(got.x - k.X) < 0.1f && fabsf(got.y - k.Y) < 0.1f && fabsf(got.z - k.Z) < 0.1f;
+        LOG_INFO("[SIGN] the game puts map %u origin at (%.2f, %.2f, %.2f); measured by hand (%.2f, %.2f, %.2f) -- %s",
+                 k.Area, got.x, got.y, got.z, k.X, k.Y, k.Z, ok ? "same" : "DIFFERENT");
+        if (ok) matched++;
+    }
+    const bool trust = matched == 2;
+    g_gameOriginTrust.store(trust ? 1 : -1);
+    LOG_INFO("[SIGN] origins read from the game are %s", trust
+             ? "trusted -- a sign can be aimed into a map nobody here has stood in"
+             : "NOT trusted -- only maps measured here or sent by the other player");
+}
+
+// The origin to aim a sign into a map with: measured here, sent by the other
+// player, or -- once the check above has passed -- read from the game.
+static bool LookupMapOrigin(uint32_t area, MapOrigin* out) {
+    if (!area || !out) return false;
+    {
+        std::lock_guard<std::mutex> lock(g_originMutex);
+        LoadMapOrigins();
+        auto it = g_mapOrigins.find(area);
+        if (it != g_mapOrigins.end()) {
+            *out = it->second;
+            return true;
+        }
+    }
+    CheckGameOriginOnce();
+    if (g_gameOriginTrust.load() != 1) return false;
+    MapOrigin got{};
+    if (!QueryGameMapOrigin(area, &got)) return false;
+    {
+        std::lock_guard<std::mutex> lock(g_originMutex);
+        g_mapOrigins[area] = got;
+        SaveMapOrigins();
+    }
+    LOG_INFO("[SIGN] map %u origin read from the game: (%.2f, %.2f, %.2f)", area, got.x, got.y, got.z);
+    *out = got;
+    return true;
+}
+
 // Read a protobuf varint. Returns the value, advances the offset.
 static uint64_t ReadVarint(const uint8_t* data, size_t len, size_t& off) {
     uint64_t value = 0;
@@ -610,9 +699,8 @@ void SetNextSignTarget(uint32_t area, float x, float y, float z) {
 bool IsMapOriginKnown(uint32_t area) {
     if (!area) return false;
     if (area == g_localAreaId.load()) return true;
-    std::lock_guard<std::mutex> lock(g_originMutex);
-    LoadMapOrigins();
-    return g_mapOrigins.find(area) != g_mapOrigins.end();
+    MapOrigin origin{};
+    return LookupMapOrigin(area, &origin);
 }
 
 // The other player measured the origin of the map it is standing in and sent it
@@ -764,13 +852,7 @@ static void AimSignAtOtherPlayer(uint8_t* data, size_t len) {
 
     if (targetArea && myArea && targetArea != myArea) {
         MapOrigin origin{};
-        bool known = false;
-        {
-            std::lock_guard<std::mutex> lock(g_originMutex);
-            LoadMapOrigins();
-            auto it = g_mapOrigins.find(targetArea);
-            if (it != g_mapOrigins.end()) { origin = it->second; known = true; }
-        }
+        const bool known = LookupMapOrigin(targetArea, &origin);
         if (!known) {
             LOG_INFO("[SIGN] they are in map %u and I have never placed a sign there, so its "
                      "origin is unknown — sign stays where I placed it", targetArea);

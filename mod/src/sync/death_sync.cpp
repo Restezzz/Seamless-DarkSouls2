@@ -515,6 +515,102 @@ void TickArrival(int Join) {
              Here.X, Here.Y, Here.Z, Here.Area, Hooks::GetLocalAreaId(), B[0], B[1], B[2], Len);
 }
 
+// --- probe: the travel list at a bonfire --------------------------------------
+// A guest's travel list holds its own bonfires and not the host's (12.09). The
+// bonfire manager [[GMImp+0x70]+0x58] keeps, besides the list of loaded bonfire
+// objects at +0x08 that FindNearestBonfire walks, an array of 0x18-byte records
+// at +0x20 (how many at +0x28), sorted by the u16 bonfire id at +0x00. Each
+// record carries two availability bytes -- +0x02 for the set this save owns and
+// +0x03 for the set a session hands over -- and the int at +0x44 says which one
+// the list reads (0 -> +0x02, 1 -> +0x03; exe+0x17E6F0 reads rec + view + 2,
+// bit 0 = available, bits 1-7 = the kindle level).
+//
+// exe+0x17E890 sets that view and empties the session set on its way through,
+// so filling byte +0x03 would be all a mod has to do -- and that byte is never
+// written to the save, so a guest's own progress cannot come to harm by it. None
+// of which is worth anything until the numbers are in: view 1 with an empty
+// session set is the explanation, view 0 means exe+0x17E890 never ran here and
+// the answer is a different one. This reads only, a few times per session, for
+// both roles, so the two can be held side by side.
+constexpr uint32_t kTravelView   = 0x44;
+constexpr uint32_t kTravelArray  = 0x20;
+constexpr uint32_t kTravelCount  = 0x28;
+constexpr uint32_t kTravelStride = 0x18;
+
+struct TravelSummary {
+    int32_t  View;
+    uint32_t Count;
+    uint32_t OwnLit;
+    uint32_t SessionLit;
+    int      Differs;
+    uint16_t DifferId[6];
+    uint8_t  DifferOwn[6];
+    uint8_t  DifferSession[6];
+};
+
+bool ReadTravelList(TravelSummary* Out) {
+    __try {
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+        if (!Gm) return false;
+        const uintptr_t Events = *reinterpret_cast<const uintptr_t*>(Gm + 0x70);
+        if (!Events) return false;
+        const uintptr_t List = *reinterpret_cast<const uintptr_t*>(Events + 0x58);
+        if (!List) return false;
+        Out->View = *reinterpret_cast<const int32_t*>(List + kTravelView);
+        Out->Count = *reinterpret_cast<const uint32_t*>(List + kTravelCount);
+        const uintptr_t Records = *reinterpret_cast<const uintptr_t*>(List + kTravelArray);
+        if (!Records || Out->Count > 4096) return false;
+        for (uint32_t I = 0; I < Out->Count; ++I) {
+            const uintptr_t Record = Records + I * kTravelStride;
+            const uint16_t Id = *reinterpret_cast<const uint16_t*>(Record);
+            const uint8_t Own = *reinterpret_cast<const uint8_t*>(Record + 2);
+            const uint8_t Session = *reinterpret_cast<const uint8_t*>(Record + 3);
+            if (Own & 1) ++Out->OwnLit;
+            if (Session & 1) ++Out->SessionLit;
+            if ((Own & 1) != (Session & 1) && Out->Differs < 6) {
+                Out->DifferId[Out->Differs] = Id;
+                Out->DifferOwn[Out->Differs] = Own;
+                Out->DifferSession[Out->Differs] = Session;
+                ++Out->Differs;
+            }
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void TickTravelList(int Join) {
+    auto& Lobby = Session::SessionManager::GetInstance();
+    if (!Lobby.IsActive()) return;
+    // Game thread only (the mod's tick).
+    static ULONGLONG s_nextAt = 0;
+    static int       s_dumps = 0;
+    if (s_dumps >= 5) return;
+    const ULONGLONG Now = GetTickCount64();
+    if (!s_nextAt) {
+        s_nextAt = Now + 15000;   // let the join settle first
+        return;
+    }
+    if (Now < s_nextAt) return;
+    s_nextAt = Now + 60000;
+    TravelSummary Summary{};
+    if (!ReadTravelList(&Summary)) {
+        LOG_INFO("[BONFIRE] the travel list cannot be read yet");
+        return;
+    }
+    ++s_dumps;
+    LOG_INFO("[BONFIRE] travel list: view %d (%s), %u records, lit in my own set %u, in the session set %u -- %s",
+             Summary.View,
+             Summary.View == 0 ? "reads +0x02, my own" : (Summary.View == 1 ? "reads +0x03, the session's" : "unexpected"),
+             Summary.Count, Summary.OwnLit, Summary.SessionLit,
+             Join == kJoinInWorld ? "I am a guest in the host's world" : "in my own world");
+    for (int I = 0; I < Summary.Differs; ++I) {
+        LOG_INFO("[BONFIRE]   bonfire %u: my own byte 0x%02X, the session byte 0x%02X",
+                 Summary.DifferId[I], Summary.DifferOwn[I], Summary.DifferSession[I]);
+    }
+}
+
 void TickHold(int Join, int32_t Hp) {
     if (!g_hold.Active) return;
     const ULONGLONG Now = GetTickCount64();
@@ -615,6 +711,7 @@ void DeathSyncGameTick() {
     TickLife(Hp);
     TickBoss(Join);
     TickArrival(Join);
+    TickTravelList(Join);
     TickHold(Join, Hp);
     TickRejoin(Join, Hp);
 }

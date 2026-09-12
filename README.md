@@ -7,7 +7,7 @@ A pathetic attempt at LukeYui imitation
 Бесшовный кооператив для Dark Souls 2</h3>
 
 <p align="center">
-version <b>0.1.2</b> ·
+version <b>0.1.3</b> ·
 <a href="https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest"><b>Download / Скачать</b></a> ·
 <a href="https://restezzz.github.io/Seamless-DarkSouls2/">Website / Сайт</a><br>
 English on the left · Русский справа
@@ -136,8 +136,8 @@ It is an early version, played by two people so far. See **Known issues** below.
 Open the **[latest release](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
 and take one archive:
 
-- **the host** (the player friends join): `Seamless-DS2-0.1.2-host.zip`
-- **friends**: `Seamless-DS2-0.1.2-joiner.zip`
+- **the host** (the player friends join): `Seamless-DS2-0.1.3-host.zip`
+- **friends**: `Seamless-DS2-0.1.3-joiner.zip`
 
 Older versions are on the [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases)
 page. Updating: extract the new archive over the old files.
@@ -158,8 +158,8 @@ page. Updating: extract the new archive over the old files.
 Открой **[последний релиз](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
 и возьми один архив:
 
-- **хосту** (к нему подключаются друзья): `Seamless-DS2-0.1.2-host.zip`
-- **друзьям**: `Seamless-DS2-0.1.2-joiner.zip`
+- **хосту** (к нему подключаются друзья): `Seamless-DS2-0.1.3-host.zip`
+- **друзьям**: `Seamless-DS2-0.1.3-joiner.zip`
 
 Прошлые версии — на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases).
 Обновление: распаковать новый архив поверх старых файлов.
@@ -177,7 +177,7 @@ page. Updating: extract the new archive over the old files.
 2. Open the game folder: Steam → right-click Dark Souls II → **Manage → Browse local files**.
    It's `...\steamapps\common\Dark Souls II Scholar of the First Sin\Game\`, the folder with
    `DarkSoulsII.exe`.
-3. Extract **`Seamless-DS2-0.1.2-host.zip`** into it (replace `dinput8.dll` if asked).
+3. Extract **`Seamless-DS2-0.1.3-host.zip`** into it (replace `dinput8.dll` if asked).
 4. Run **`StartServer.bat`**. The first time Windows may ask about the firewall — allow it.
    The window shows **your address for friends** (26.x.x.x) and where the key file
    `ds2_server_public.key` is (in the game folder).
@@ -193,7 +193,7 @@ page. Updating: extract the new archive over the old files.
 2. Открой папку игры: Steam → правый клик по Dark Souls II → **Управление → Просмотреть
    локальные файлы**. Это `...\steamapps\common\Dark Souls II Scholar of the First Sin\Game\`,
    там лежит `DarkSoulsII.exe`.
-3. Распакуй туда **`Seamless-DS2-0.1.2-host.zip`** (если спросит — заменить `dinput8.dll`).
+3. Распакуй туда **`Seamless-DS2-0.1.3-host.zip`** (если спросит — заменить `dinput8.dll`).
 4. Запусти **`StartServer.bat`**. В первый раз Windows может спросить про брандмауэр —
    разреши. Окно покажет **адрес для друзей** (26.x.x.x) и где лежит файл-ключ
    `ds2_server_public.key` (в папке игры).
@@ -208,7 +208,7 @@ page. Updating: extract the new archive over the old files.
 ## Friend: setting up (once)
 
 1. Install Radmin VPN and join the host's network (**Network → Join network**).
-2. Extract **`Seamless-DS2-0.1.2-joiner.zip`** into your game folder (same place as above).
+2. Extract **`Seamless-DS2-0.1.3-joiner.zip`** into your game folder (same place as above).
 3. Put the host's **`ds2_server_public.key`** into the same folder.
 4. Open **`ds2_seamless_coop.ini`** in Notepad and write the host's address after
    `server_ip=`, for example `server_ip=26.12.34.56`. Save.
@@ -219,7 +219,7 @@ page. Updating: extract the new archive over the old files.
 ## Друг: настройка (один раз)
 
 1. Поставь Radmin VPN и войди в сеть хоста (**Сеть → Присоединиться к сети**).
-2. Распакуй **`Seamless-DS2-0.1.2-joiner.zip`** в свою папку игры (туда же, что и выше).
+2. Распакуй **`Seamless-DS2-0.1.3-joiner.zip`** в свою папку игры (туда же, что и выше).
 3. Положи в ту же папку **`ds2_server_public.key`** от хоста.
 4. Открой **`ds2_seamless_coop.ini`** Блокнотом и впиши адрес хоста после `server_ip=`,
    например `server_ip=26.12.34.56`. Сохрани.
@@ -313,6 +313,8 @@ the menu key are easier to change in the menu itself.
 | `loot_sync` | `true` | the guest's loot in the host's world |
 | `free_travel` | `true` | no co-op fog between areas |
 | `death_respawn` | `true` | a guest who dies comes back |
+| `npc_spawn` | `true` | a guest's world finishes putting its NPCs in (Delete flips it) |
+| `boss_fog_wait` | `false` | make the boss fog hold a guest back until the other player is inside |
 | `allow_invasions` | `false` | invasions |
 | `language` | `auto` | `auto`, `en` or `ru` |
 | `menu_key` | `F1` | the menu key |
@@ -335,6 +337,8 @@ the menu key are easier to change in the menu itself.
 | `loot_sync` | `true` | добыча гостя в мире хоста |
 | `free_travel` | `true` | нет кооп-тумана между локациями |
 | `death_respawn` | `true` | погибший гость возвращается |
+| `npc_spawn` | `true` | мир гостя досоздаёт в нём NPC (переключается Delete) |
+| `boss_fog_wait` | `false` | заставить туман босса держать гостя, пока не зайдёт второй |
 | `allow_invasions` | `false` | вторжения |
 | `language` | `auto` | `auto`, `en` или `ru` |
 | `menu_key` | `F1` | клавиша меню |
@@ -358,11 +362,11 @@ the menu key are easier to change in the menu itself.
   of the player whose game crashed.
 - **Removing the mod.** Delete `dinput8.dll` from the game folder.
 
-## Known issues (0.1.2)
+## Known issues (0.1.3)
 
 - NPCs are invisible or see-through for the guest, so there is nobody to talk to.
 - At a bonfire the guest's travel list holds its own bonfires, not the host's.
-- The guest can't start a boss fight by itself; it follows the host through the fog.
+- A boss only wakes for the host: a guest who walks into the fog first finds it standing idle.
 - NPC dialogue and shop progress may not stick for the guest.
 - The host sees the guest as a white phantom.
 
@@ -380,11 +384,11 @@ the menu key are easier to change in the menu itself.
   у кого вылетело.
 - **Удалить мод.** Удалить `dinput8.dll` из папки игры.
 
-## Известные проблемы (0.1.2)
+## Известные проблемы (0.1.3)
 
 - У гостя NPC невидимы или прозрачны, поэтому и говорить не с кем.
 - У костра в списке перемещения у гостя свои костры, а не костры хоста.
-- Гость не может сам запустить бой с боссом; он проходит в туман за хостом.
+- Босс просыпается только на хоста: гость, зашедший в туман первым, найдёт его в стойке.
 - Прогресс диалогов и магазинов у NPC может не сохраняться у гостя.
 - Хост видит гостя белым фантомом.
 

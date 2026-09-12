@@ -355,17 +355,48 @@ std::atomic<uint32_t> g_mpCalls{ 0 };
 // Answering no to that one caller (CALL at exe+0x1D088E) lets it settle here.
 std::atomic<bool> g_chestSettleLocal{ true };
 
+// A world entered by a multiplayer warp never finishes putting its characters
+// in, which is what leaves a guest with NPCs missing or see-through and nobody
+// to talk to (12.09: not one talk prompt in a whole session).
+//
+// exe+0x40ECF0, EnemyGeneratorAreaCtrl::Update:
+//
+//   exe+0x40ED7F  MOV    R14B,1           ; "not multiplayer"
+//   exe+0x40ED8E  CALL   exe+0x5135F0     ; ... unless this says otherwise
+//   exe+0x40EDA1  CMOVNZ R14D,EBP         ; -> R14 = 0
+//   exe+0x40EE7C  TEST   R14B,R14B
+//   exe+0x40EE7F  JZ     exe+0x40EF2E     ; skips the completion block whole
+//
+// so answering "no" to that one call -- return address exe+0x40ED93 -- lets the
+// block run for a guest as well. Characters are each client's own anyway, which
+// is why a rest has to be replayed between them (world_sync.cpp), so this makes
+// no second copy of anything.
+//
+// Whether this is really what hides the NPCs is a question for the game and not
+// for the disassembly: it ships on, the key below flips it, and the log counts
+// the calls either way.
+std::atomic<bool>     g_npcSpawnLocal{ true };
+std::atomic<uint32_t> g_npcSpawnCalls{ 0 };
+
 static bool IsGuestInHostWorld();   // below, with the IsHost detour
 
 uint64_t __fastcall MpActiveHook(void* Session) {
-    static const uintptr_t kChestRollReturn =
-        reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr)) + 0x1D0893;
+    static const uintptr_t kBase = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+    static const uintptr_t kChestRollReturn = kBase + 0x1D0893;
+    static const uintptr_t kGeneratorReturn = kBase + 0x40ED93;
+    const uintptr_t Caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
     // Only once the guest stands in the host's world (join state 7), never
     // during the join load: the first join with this in crashed during that
     // load (12.09 01:24, ee), and this is the one new thing that acts on the
     // world as it loads. Chests of areas loaded afterwards still settle.
-    if (g_chestSettleLocal.load() && reinterpret_cast<uintptr_t>(_ReturnAddress()) == kChestRollReturn &&
-        IsGuestInHostWorld()) {
+    if (g_chestSettleLocal.load() && Caller == kChestRollReturn && IsGuestInHostWorld()) {
+        return 0;
+    }
+    if (g_npcSpawnLocal.load() && Caller == kGeneratorReturn && IsGuestInHostWorld()) {
+        const uint32_t Count = g_npcSpawnCalls.fetch_add(1) + 1;
+        if (Count == 1 || Count % 2000 == 0) {
+            LOG_INFO("[NPC] this world is finishing its characters here as a guest (%u calls)", Count);
+        }
         return 0;
     }
     if (g_forceMultiplayer.load()) {
@@ -373,6 +404,20 @@ uint64_t __fastcall MpActiveHook(void* Session) {
         return 1;
     }
     return g_origMpActive(Session);
+}
+
+// Flip the generator completion above, for testing by inversion: on, a guest's
+// world finishes putting characters in; off, the game's own way, where it does
+// not. The counter says whether the call site was even reached.
+void ToggleNpcSpawnLocal() {
+    const bool On = !g_npcSpawnLocal.load();
+    g_npcSpawnLocal.store(On);
+    LOG_INFO("[NPC] characters finished in someone else's world: %s (%u calls so far)",
+             On ? "ON" : "off (the game's own way)", g_npcSpawnCalls.load());
+    DS2Coop::UI::Overlay::GetInstance().ShowNotification(
+        On ? DS2Coop::UI::Tr("NPCs: this world finishes spawning them", "NPC: мир досоздаёт их здесь")
+           : DS2Coop::UI::Tr("NPCs: the game's own way", "NPC: как в самой игре"),
+        4.0f, DS2Coop::UI::NotifyKind::Player);
 }
 
 // Event flags — the thing that actually decides whether a fog gate is there.
@@ -2841,13 +2886,18 @@ bool PlayerSync::Initialize() {
     // No co-op fog walls at area borders, and crossing one keeps the session
     // (free_travel.cpp).
     DS2Coop::Sync::InstallFreeTravel(SeamlessCoopMod::GetInstance().GetConfig().free_travel);
+    DS2Coop::Sync::SetBossFogWait(SeamlessCoopMod::GetInstance().GetConfig().boss_fog_wait);
 
     // A death no longer ends the co-op: the guest comes straight back to the
     // partner's world, and boss fights wait for both (death_sync.cpp).
     DS2Coop::Sync::InstallDeathSync(SeamlessCoopMod::GetInstance().GetConfig().death_respawn);
 
-    // A guest can talk to NPCs in the host's world (npc_talk.cpp).
+    // A guest can talk to NPCs in the host's world (npc_talk.cpp)...
     DS2Coop::Sync::InstallNpcTalk();
+
+    // ... once the world it joined has finished putting those NPCs in at all
+    // (MpActiveHook above, ini npc_spawn).
+    g_npcSpawnLocal.store(SeamlessCoopMod::GetInstance().GetConfig().npc_spawn);
 
     // Verify we have the GameManagerImp address
     auto& resolver = DS2Coop::AddressResolver::GetInstance();
@@ -3224,6 +3274,15 @@ void PlayerSync::Update(float deltaTime) {
         const bool f4Down = HotkeyDown(VK_F4);
         if (f4Down && !s_f4WasDown) DS2Coop::Sync::ToggleLootSyncNow();
         s_f4WasDown = f4Down;
+
+        // Delete: whether a guest's world finishes putting its characters in
+        // (MpActiveHook, ini npc_spawn) -- the inversion that shows whether that
+        // is what leaves the NPCs missing or see-through. Every function key is
+        // taken already, hence Delete.
+        static bool s_delWasDown = false;
+        const bool delDown = HotkeyDown(VK_DELETE);
+        if (delDown && !s_delWasDown) ToggleNpcSpawnLocal();
+        s_delWasDown = delDown;
 
         // Page Up / Page Down: the two halves of free travel (free_travel.cpp),
         // one each, for testing by inversion -- Page Up puts the co-op fog walls

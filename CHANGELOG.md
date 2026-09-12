@@ -6,6 +6,37 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 Каждая версия лежит на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) двумя
 архивами: `Seamless-DS2-<версия>-host.zip` для хоста и `Seamless-DS2-<версия>-joiner.zip` для друзей.
 
+## 0.1.3 — 2026-09-12
+
+**Fixed / Исправлено**
+
+- The boss fog lets a guest walk in again, the way it did in 0.1.0. Holding the guest back until the host was
+  inside was my own change in 0.1.1, and it was the wrong call: a host standing at the fog waiting for the guest
+  locked them both out. Waiting is now an option instead of the rule (`boss_fog_wait`, off by default).
+  Туман босса снова пускает гостя, как в 0.1.0. Ожидание хоста я добавил в 0.1.1 сам, и это было неверное решение:
+  если хост стоял у тумана и ждал гостя, запертыми оказывались оба. Теперь ожидание — необязательная настройка
+  (`boss_fog_wait`, по умолчанию выключена).
+
+- Where a map's sign origin comes from. It used to be measured by placing a sign in that map, which nobody had ever
+  done in Majula, so joining there could not be aimed at all. The game keeps that origin in the map data itself
+  (`exe+0x2A9E70`), and the mod reads it from there -- after checking, in the game, that it reproduces the two
+  origins measured by hand.
+  Откуда берётся начало карты для знака. Раньше его измеряли, поставив в этой карте знак, а в Маджуле этого никто
+  никогда не делал, поэтому и прицелиться было нечем. У игры это начало лежит в данных самой карты
+  (`exe+0x2A9E70`), и мод читает его оттуда — предварительно проверив в игре, что оно совпадает с двумя началами,
+  измеренными руками.
+
+**Being tested / Проверяется**
+
+- NPCs for a guest. A world entered by a multiplayer warp never finishes putting its characters in, which is what
+  left NPCs missing or see-through with nobody to talk to -- the talk prompt was never the problem. That step now
+  runs for a guest too. It ships on, and **Delete** turns it off and back on in the game, so both states can be
+  seen in one session; the log also reports every character the game takes back off the map.
+  NPC у гостя. Мир, в который вошли мультиплеерным варпом, не досоздаёт своих персонажей — отсюда пропавшие или
+  прозрачные NPC и то, что говорить не с кем; подсказка «Поговорить» была тут не при чём. Теперь этот шаг
+  выполняется и у гостя. По умолчанию включено, а **Delete** выключает и включает это прямо в игре, чтобы увидеть
+  оба состояния за один заход; ещё лог сообщает о каждом персонаже, которого игра снимает с карты.
+
 ## 0.1.2 — 2026-09-12
 
 What the two players found in 0.1.1.

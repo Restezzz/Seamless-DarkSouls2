@@ -350,6 +350,10 @@ void SeamlessCoopMod::LoadConfig() {
                     m_config.free_travel = (value == "true" || value == "1");
                 } else if (key == "death_respawn") {
                     m_config.death_respawn = (value == "true" || value == "1");
+                } else if (key == "npc_spawn") {
+                    m_config.npc_spawn = (value == "true" || value == "1");
+                } else if (key == "boss_fog_wait") {
+                    m_config.boss_fog_wait = (value == "true" || value == "1");
                 } else if (key == "debug_hotkeys") {
                     m_config.debug_hotkeys = (value == "true" || value == "1");
                 } else if (key == "auto_summon") {
@@ -400,6 +404,8 @@ void SeamlessCoopMod::SaveConfig() {
         configFile << "loot_sync=" << (m_config.loot_sync ? "true" : "false") << "\n";
         configFile << "free_travel=" << (m_config.free_travel ? "true" : "false") << "\n";
         configFile << "death_respawn=" << (m_config.death_respawn ? "true" : "false") << "\n";
+        configFile << "npc_spawn=" << (m_config.npc_spawn ? "true" : "false") << "\n";
+        configFile << "boss_fog_wait=" << (m_config.boss_fog_wait ? "true" : "false") << "\n";
         configFile << "debug_hotkeys=" << (m_config.debug_hotkeys ? "true" : "false") << "\n";
         configFile << "sign_under_feet=" << (m_config.sign_under_feet ? "true" : "false") << "\n";
         configFile << "flag_sync=" << m_config.flag_sync << "\n";

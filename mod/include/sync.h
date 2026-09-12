@@ -77,6 +77,9 @@ void FreeTravelGameTick();   // writes the requested bytes, on the game thread o
 // A boss fog the host has walked through (packet BossDoorCrossed): the guest's
 // own copy of that door cannot see it, so without this it stays a wall.
 void NoteHostCrossedBossFog(uint32_t flag);
+// Whether a boss fog makes a guest wait for the other player at all. Off: the
+// fog behaves as it does for a host, which is what 0.1.0 did.
+void SetBossFogWait(bool on);
 
 // Deaths in co-op (death_sync.cpp). A guest who dies -- or whose host dies --
 // goes home the game's way and is brought straight back to the partner's world,

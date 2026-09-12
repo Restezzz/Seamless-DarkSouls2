@@ -7,7 +7,7 @@
 namespace DS2Coop {
 
 // Version information
-constexpr const char* MOD_VERSION = "0.1.2";  // keep in step with VERSION and CMakeLists.txt
+constexpr const char* MOD_VERSION = "0.1.3";  // keep in step with VERSION and CMakeLists.txt
 constexpr const char* MOD_NAME = "Dark Souls 2 Seamless Co-op";
 
 // Game version support
@@ -51,6 +51,16 @@ struct ModConfig {
     // the partner's world at its respawn bonfire; in a boss fight nobody comes
     // back until the fight is decided or both are dead. On by default.
     bool death_respawn = true;
+    // Let a guest's own game finish putting characters into the world it joined.
+    // The generator system skips that step in multiplayer, which is why NPCs are
+    // missing or half-there for a guest and there is nobody to talk to. On by
+    // default; Delete flips it in game, so the inversion can be seen either way.
+    bool npc_spawn = true;
+    // Make a boss fog hold a guest back until the other player has gone in.
+    // Off: the fog behaves for a guest as it does for a host, the way 0.1.0 had
+    // it. On, a guest who would otherwise walk in first cannot wake the boss by
+    // itself -- but a host waiting at the fog then locks both players out.
+    bool boss_fog_wait = false;
     // Test keys F2-F11, Home and End (they place signs, flip patches, dump
     // memory). Off by default so nobody sets them off by habit; the menu key,
     // Insert and Esc always work.
