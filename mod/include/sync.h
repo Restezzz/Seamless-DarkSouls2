@@ -116,6 +116,13 @@ void SetNpcTalkEnabled(bool on);
 // The partner's character object, as last seen by the code that draws it, or 0
 // if nothing that recent is known. The camera needs it (docs §3.23).
 uintptr_t GetPartnerCharacter(uint64_t maxAgeMs);
+
+// How the two players stand towards each other -- no damage, friendly fire
+// without lock-on, or a real fight (pvp_modes.cpp, docs §3.25). For now this
+// only reads: it names both players' team bytes and the relation the game has
+// between them, because the meaning of those numbers has never been measured
+// and the ones in the old notes came from a bad memory scan.
+void PvpModesGameTick();   // game thread
 void DeathSyncGameTick();             // game thread, every frame
 void NotePartnerLife(bool alive);     // the partner's own PlayerDeath / PlayerRespawn
 void NotePartnerBoss(int32_t active, int32_t phase);   // the host's boss fight (BossState)
