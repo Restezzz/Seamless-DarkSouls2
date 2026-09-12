@@ -310,7 +310,15 @@ static void LoadMapOrigins() {
         if (area) { g_mapOrigins[area] = MapOrigin{ x, y, z }; loaded++; }
     }
     fclose(f);
+    // With the numbers, not just the count. A stored origin that is wrong is
+    // invisible otherwise, and one of them was wrong for two days: Majula's was
+    // the position of whoever had placed a sign there, and it went on summoning
+    // the guest off the map long after the code was fixed, because the guest's
+    // own copy of this file still held it (12.09).
     LOG_INFO("[SIGN] %d map origin(s) read back from disk", loaded);
+    for (const auto& kv : g_mapOrigins) {
+        LOG_INFO("[SIGN]   map %u origin (%.2f, %.2f, %.2f)", kv.first, kv.second.x, kv.second.y, kv.second.z);
+    }
 }
 
 static void SaveMapOrigins() {
@@ -345,6 +353,13 @@ using MapOriginQueryFn = uint8_t(__fastcall*)(uint32_t, const float*, float*);
 
 static std::atomic<int> g_gameOriginTrust{ 0 };   // 0 not checked yet, 1 trusted, -1 no
 
+// Maps whose origin was established in this run -- by the game itself or by a
+// sign of this player's own, in that map. Anything else is hearsay off the disk,
+// and hearsay has to lose to a number the other player measured just now: a
+// wrong value stored for Majula survived every fix to the code because the mod
+// refused to overwrite what it already had (12.09).
+static std::unordered_map<uint32_t, bool> g_originMeasuredHere;
+
 static bool QueryGameMapOrigin(uint32_t area, MapOrigin* out) {
     if (!area || !out) return false;
     __try {
@@ -371,20 +386,38 @@ static void CheckGameOriginOnce() {
         { 10310000u, -13.98f, -15.02f, 163.02f },
         { 10100000u, 207.99f,  10.00f, -133.02f },
     };
-    int matched = 0;
+    // Per map, and never all-or-nothing. Demanding both of them at once is what
+    // made this whole check dead code: the query only answers for a map whose
+    // data is loaded, the loop asked for 10310000 first, that map is almost never
+    // loaded next to 10100000, and the `return` left trust at "not checked yet"
+    // for the entire session -- every time. So the game's own origin was never
+    // once used, the stored one always won, and Majula stayed broken through
+    // three releases (12.09, both players' logs have not a single line from here).
+    int matched = 0, wrong = 0, resolved = 0;
     for (const Known& k : known) {
         MapOrigin got{};
-        if (!QueryGameMapOrigin(k.Area, &got)) return;   // not in a world yet: ask again later
+        if (!QueryGameMapOrigin(k.Area, &got)) continue;   // that map is not loaded: try the next
+        ++resolved;
         const bool ok = fabsf(got.x - k.X) < 0.1f && fabsf(got.y - k.Y) < 0.1f && fabsf(got.z - k.Z) < 0.1f;
         LOG_INFO("[SIGN] the game puts map %u origin at (%.2f, %.2f, %.2f); measured by hand (%.2f, %.2f, %.2f) -- %s",
                  k.Area, got.x, got.y, got.z, k.X, k.Y, k.Z, ok ? "same" : "DIFFERENT");
-        if (ok) matched++;
+        if (ok) ++matched; else ++wrong;
     }
-    const bool trust = matched == 2;
+    if (!resolved) {
+        static bool told = false;
+        if (!told) {
+            told = true;
+            LOG_INFO("[SIGN] the game cannot resolve either of the maps measured by hand yet -- "
+                     "stored origins until it can");
+        }
+        return;   // ask again on the next sign
+    }
+    const bool trust = wrong == 0 && matched > 0;
     g_gameOriginTrust.store(trust ? 1 : -1);
-    LOG_INFO("[SIGN] origins read from the game are %s", trust
-             ? "trusted -- a sign can be aimed into a map nobody here has stood in"
-             : "NOT trusted -- only maps measured here or sent by the other player");
+    LOG_INFO("[SIGN] origins read from the game are %s (%d of %zu maps measured by hand could be checked)",
+             trust ? "trusted -- a sign can be aimed into a map nobody here has stood in"
+                   : "NOT trusted -- only maps measured here or sent by the other player",
+             resolved, sizeof(known) / sizeof(known[0]));
 }
 
 // The origin to aim a sign into a map with. The game's own answer comes first,
@@ -417,6 +450,7 @@ static bool LookupMapOrigin(uint32_t area, MapOrigin* out) {
         {
             std::lock_guard<std::mutex> lock(g_originMutex);
             g_mapOrigins[area] = fromGame;
+            g_originMeasuredHere[area] = true;
             SaveMapOrigins();
         }
         if (!haveStored) {
@@ -733,7 +767,26 @@ void NoteRemoteMapOrigin(uint32_t area, float x, float y, float z) {
     std::lock_guard<std::mutex> lock(g_originMutex);
     LoadMapOrigins();
     auto it = g_mapOrigins.find(area);
-    if (it != g_mapOrigins.end()) return;   // ours was measured here; keep it
+
+    // Only a value established in this run outranks the other player's: it was
+    // either the game's own answer or measured by a sign in that very map. A
+    // line read from the file is hearsay, and refusing to overwrite hearsay is
+    // exactly what kept the guest being summoned off the map in Majula -- the
+    // host measured the right origin, sent it every ten seconds, and the guest
+    // threw it away in favour of the wrong number in its own file (12.09).
+    if (it != g_mapOrigins.end()) {
+        if (g_originMeasuredHere.count(area)) return;   // measured here: keep ours
+        const bool same = fabsf(it->second.x - x) < 0.1f && fabsf(it->second.y - y) < 0.1f &&
+                          fabsf(it->second.z - z) < 0.1f;
+        if (same) return;
+        LOG_WARNING("[SIGN] map %u was stored as (%.2f, %.2f, %.2f) and the other player measured "
+                    "(%.2f, %.2f, %.2f) in it -- taking theirs, ours was only read from the file",
+                    area, it->second.x, it->second.y, it->second.z, x, y, z);
+        g_mapOrigins[area] = MapOrigin{ x, y, z };
+        SaveMapOrigins();
+        return;
+    }
+
     g_mapOrigins[area] = MapOrigin{ x, y, z };
     SaveMapOrigins();
     LOG_INFO("[SIGN] map %u origin from the other player: (%.2f, %.2f, %.2f) -- signs can be aimed into it now",
@@ -765,15 +818,20 @@ void ShareLocalMapOrigin() {
 }
 
 // The origin of the map this player is standing in, to send to the other one.
+//
+// Through LookupMapOrigin, so the game is asked first. It used to read the
+// stored table and nothing else, and two things followed from that: the origin
+// handed to the other player was whatever the file happened to hold, and the
+// host put a sign of its own down in every map missing from that file just to
+// measure it -- which is the summon sign that turned up under the host's feet in
+// Majula (12.09). Where the game can answer, neither happens.
 bool GetLocalMapOrigin(uint32_t* area, float* x, float* y, float* z) {
     const uint32_t here = g_localAreaId.load();
     if (!here || !area || !x || !y || !z) return false;
-    std::lock_guard<std::mutex> lock(g_originMutex);
-    LoadMapOrigins();
-    auto it = g_mapOrigins.find(here);
-    if (it == g_mapOrigins.end()) return false;
+    MapOrigin origin{};
+    if (!LookupMapOrigin(here, &origin)) return false;
     *area = here;
-    *x = it->second.x; *y = it->second.y; *z = it->second.z;
+    *x = origin.x; *y = origin.y; *z = origin.z;
     return true;
 }
 }
@@ -839,6 +897,7 @@ static void AimSignAtOtherPlayer(uint8_t* data, size_t len) {
             auto it = g_mapOrigins.find(myArea);
             const bool isNew = (it == g_mapOrigins.end());
             g_mapOrigins[myArea] = o;
+            g_originMeasuredHere[myArea] = true;   // measured in this map, in this run
             if (isNew) LOG_INFO("[SIGN] map %u origin learned from my own sign: (%.2f, %.2f, %.2f)",
                                 myArea, o.x, o.y, o.z);
             SaveMapOrigins();

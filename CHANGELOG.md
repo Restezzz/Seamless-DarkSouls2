@@ -25,6 +25,34 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 
 **Fixed / Исправлено**
 
+- Majula, third attempt — and this time with the reason the first two changed nothing. The check that
+  decides whether the game's own map origin can be trusted demanded two hand-measured maps at once. The
+  query only answers for a map whose data is loaded, the first of those two almost never is, and the loop
+  returned on it: trust stayed at "not checked yet" for every session, the game's origin was never used
+  once, and the value stored on disk always won. Both players' logs from 12.09 contain not a single line
+  from that check — that is the proof. It is checked per map now. On top of that, a stored origin now loses
+  to one the other player measured just now: the host measured Majula correctly (its real origin is
+  practically zero) and sent it every ten seconds, while the guest threw it away in favour of the wrong
+  number in its own file. The host's stray summon sign in Majula goes with it — it was placed only because
+  "this map has no origin".
+  Маджула, попытка третья — и на этот раз с причиной, по которой первые две ничего не изменили. Проверка
+  «можно ли доверять началу карты от самой игры» требовала сразу две карты, измеренные руками. Запрос
+  отвечает только для карты, чьи данные загружены, первая из этих двух почти никогда не загружена, и цикл
+  на ней выходил: доверие в каждой сессии оставалось «не проверено», ответ игры не использовался ни разу,
+  и всегда побеждало значение с диска. В логах обеих сторон за 12.09 нет ни одной строки из этой
+  проверки — это и есть доказательство. Теперь карты проверяются по одной. Вдобавок сохранённое начало
+  карты уступает тому, которое партнёр измерил только что: хост измерял Маджулу правильно (её настоящее
+  начало — практически ноль) и отправлял каждые десять секунд, а гость выбрасывал это в пользу неверного
+  числа в своём файле. Заодно исчезает и лишний знак призыва под хостом в Маджуле — он ставился только
+  потому, что «у этой карты нет начала».
+- The other player's bonfires are lit in this player's own set as well, when progress sharing is on. The
+  session byte alone was not enough: all five of the host's bonfires reached the guest, 10670 sat there
+  with its session byte set, and the travel menu still did not list it. The menu reads more than that
+  byte; owning the bonfire is what it cannot argue with. Only the lit bit is set, never the kindle level.
+  Костры второго игрока зажигаются и в собственном наборе, если общий прогресс включён. Одного
+  сессионного байта не хватило: все пять костров хоста дошли до гостя, у 10670 сессионный байт стоял, а в
+  меню перемещения костра всё равно не было. Меню читает не только этот байт; владение костром оспорить
+  нечем. Ставится только бит «зажжён», уровень разжигания не трогается.
 - Flag syncing had never sent a single flag, and two of its own guards were the reason. A group that reads empty
   while the game rebuilds the table used to abort the whole pass **before** the baseline was replaced, so after
   the first occurrence nothing was ever compared again — 994 such lines in the guest's log, 541 in the host's.

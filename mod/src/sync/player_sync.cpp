@@ -2756,6 +2756,10 @@ void SendFlagCatchUp() {
     LOG_INFO("[FLAGSYNC] handed over what is already done: %d group(s), %zu flag(s) set", Groups, Set);
 }
 
+bool IsProgressSharingOn() {
+    return static_cast<FlagSyncMode>(g_flagSyncMode.load()) == FlagSyncMode::On;
+}
+
 void NoteRemoteFlagBulk(uint32_t group, const uint8_t* bits, uint32_t bytes) {
     if (!bits || !bytes) return;
     if (static_cast<FlagSyncMode>(g_flagSyncMode.load()) != FlagSyncMode::On) {

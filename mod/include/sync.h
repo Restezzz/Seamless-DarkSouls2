@@ -92,6 +92,10 @@ void NotePartnerBonfires(const void* entries, uint32_t count);
 // gates and bosses. Set-only, and written on the game's own thread.
 void SendFlagCatchUp();
 void NoteRemoteFlagBulk(uint32_t group, const uint8_t* bits, uint32_t bytes);
+// Whether the player agreed to progress being written into this save (ini
+// flag_sync). Asked by anything that would change the save rather than the
+// session: the partner's bonfires in byte +0x02, for one.
+bool IsProgressSharingOn();
 
 // Deaths in co-op (death_sync.cpp). A guest who dies -- or whose host dies --
 // goes home the game's way and is brought straight back to the partner's world,

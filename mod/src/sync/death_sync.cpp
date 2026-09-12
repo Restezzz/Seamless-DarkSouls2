@@ -659,7 +659,16 @@ int CollectOwnBonfires(Network::BonfireEntry* Out, uint32_t Max) {
 }
 
 // The other player's set into byte +0x03. Returns how many bytes changed.
-int WriteSessionBonfires(const uint16_t* Ids, const uint8_t* Flags, uint32_t Count) {
+//
+// With progress sharing on it also lights those bonfires in byte +0x02 -- this
+// player's own set, the one that is saved. The session byte alone was not
+// enough: measured 12.09, the host's five bonfires all reached the guest and
+// bonfire 10670 sat there with its session byte 0x01, and it still was not in
+// the guest's travel menu. The menu reads more than that byte; owning the
+// bonfire outright is what the menu cannot argue with. Only the lit bit is set,
+// never the kindle level above it.
+int WriteSessionBonfires(const uint16_t* Ids, const uint8_t* Flags, uint32_t Count,
+                         bool Share, int* Unlocked) {
     __try {
         const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
         if (!Gm) return -1;
@@ -680,6 +689,13 @@ int WriteSessionBonfires(const uint16_t* Ids, const uint8_t* Flags, uint32_t Cou
                 if (*Session != Flags[K]) {
                     *Session = Flags[K];
                     ++Written;
+                }
+                if (Share && (Flags[K] & 1)) {
+                    uint8_t* Own = reinterpret_cast<uint8_t*>(Record + 2);
+                    if (!(*Own & 1)) {
+                        *Own |= 1;
+                        if (Unlocked) ++(*Unlocked);
+                    }
                 }
                 break;
             }
@@ -720,7 +736,9 @@ void ApplyPartnerBonfires() {
         }
     }
     if (!Count) return;
-    const int Written = WriteSessionBonfires(Ids, Flags, Count);
+    const bool Share = IsProgressSharingOn();
+    int Unlocked = 0;
+    const int Written = WriteSessionBonfires(Ids, Flags, Count, Share, &Unlocked);
     static int s_lastWritten = -2;
     if (Written != s_lastWritten) {
         s_lastWritten = Written;
@@ -730,6 +748,10 @@ void ApplyPartnerBonfires() {
             LOG_INFO("[BONFIRE] the other player's %u bonfires are in my travel list (%d record(s) changed)",
                      Count, Written);
         }
+    }
+    if (Unlocked > 0) {
+        LOG_INFO("[BONFIRE] %d of the other player's bonfires lit in my own set as well -- progress sharing is on",
+                 Unlocked);
     }
 }
 
