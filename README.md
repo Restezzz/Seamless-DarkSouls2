@@ -3,9 +3,13 @@ A pathetic attempt at LukeYui imitation
 
 ---
 
+<h3 align="center">Seamless Co-op mod for Dark Souls 2: Scholar of the First Sin<br>
+Бесшовный кооператив для Dark Souls 2</h3>
+
 <p align="center">
-<b>Seamless Co-op for Dark Souls II: Scholar of the First Sin</b> · version <b>0.1.1</b><br>
-<a href="https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest"><b>Download / Скачать</b></a><br>
+version <b>0.1.1</b> ·
+<a href="https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest"><b>Download / Скачать</b></a> ·
+<a href="https://restezzz.github.io/Seamless-DarkSouls2/">Website / Сайт</a><br>
 English on the left · Русский справа
 </p>
 
@@ -395,7 +399,7 @@ the menu key are easier to change in the menu itself.
 | `scripts` | `package.ps1` builds the two archives |
 | `mod` | source code of the mod (`dinput8.dll`) |
 | `server` | the patch for the ds3os server and how to build it |
-| `docs` | research notes on the game's internals (Russian) and screenshots |
+| `docs` | research notes on the game's internals (Russian), screenshots and the project website (GitHub Pages) |
 
 ## Building from source
 
@@ -421,7 +425,7 @@ The mod ends up in `mod/build/bin/Release/dinput8.dll`. The server: see
 | `scripts` | `package.ps1` собирает оба архива |
 | `mod` | исходники мода (`dinput8.dll`) |
 | `server` | патч к серверу ds3os и как его собрать |
-| `docs` | заметки об устройстве игры и скриншоты |
+| `docs` | заметки об устройстве игры, скриншоты и сайт проекта (GitHub Pages) |
 
 ## Сборка из исходников
 

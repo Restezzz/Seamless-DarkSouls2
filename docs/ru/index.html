@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seamless Co-op для Dark Souls 2 — бесшовный кооператив (SotFS)</title>
+<meta name="description" content="Мод на бесшовный кооператив для Dark Souls II: Scholar of the First Sin. Пройдите всю игру вдвоём: призыв сам и откуда угодно, а босс, смерть или новая локация не разрывают сессию. Бесплатно, открытый код.">
+<link rel="canonical" href="https://restezzz.github.io/Seamless-DarkSouls2/ru/">
+<link rel="alternate" hreflang="en" href="https://restezzz.github.io/Seamless-DarkSouls2/">
+<link rel="alternate" hreflang="ru" href="https://restezzz.github.io/Seamless-DarkSouls2/ru/">
+<link rel="alternate" hreflang="x-default" href="https://restezzz.github.io/Seamless-DarkSouls2/">
+<meta name="theme-color" content="#0e0b09">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Seamless Co-op для Dark Souls 2">
+<meta property="og:title" content="Seamless Co-op — бесшовный кооператив для Dark Souls 2">
+<meta property="og:description" content="Пройдите всю Dark Souls II: Scholar of the First Sin вдвоём. Призыв откуда угодно; боссы, смерти и костры не заканчивают сессию.">
+<meta property="og:url" content="https://restezzz.github.io/Seamless-DarkSouls2/ru/">
+<meta property="og:image" content="https://restezzz.github.io/Seamless-DarkSouls2/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Seamless Co-op для Dark Souls 2 и его кооп-меню в игре">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:locale:alternate" content="en_US">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='9' y='9' width='14' height='14' rx='1.5' transform='rotate(45 16 16)' fill='%23e8893a'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Forum&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="../site.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Seamless Co-op для Dark Souls II",
+  "alternateName": ["Бесшовный кооператив для Dark Souls 2", "Seamless Co-op for Dark Souls II", "DS2 Seamless Co-op"],
+  "description": "Мод на бесшовный кооператив для Dark Souls II: Scholar of the First Sin (ПК). Призыв сам и откуда угодно; боссы, смерти и костры не заканчивают сессию.",
+  "applicationCategory": "GameApplication",
+  "applicationSubCategory": "Мод для игры",
+  "operatingSystem": "Windows 10, Windows 11",
+  "url": "https://restezzz.github.io/Seamless-DarkSouls2/ru/",
+  "downloadUrl": "https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest",
+  "screenshot": "https://restezzz.github.io/Seamless-DarkSouls2/screenshots/ru_lobby_guest.png",
+  "license": "https://opensource.org/licenses/MIT",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "RUB" },
+  "inLanguage": "ru",
+  "author": { "@type": "Person", "name": "Restez", "url": "https://github.com/Restezzz" },
+  "sameAs": ["https://github.com/Restezzz/Seamless-DarkSouls2"]
+}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">К содержимому</a>
+
+<div class="atmosphere" aria-hidden="true">
+  <span class="ember" style="--x:4%;--t:15s;--d:0s;--drift:70px"></span>
+  <span class="ember" style="--x:11%;--t:12s;--d:3s;--drift:30px"></span>
+  <span class="ember" style="--x:17%;--t:17s;--d:6s;--drift:90px"></span>
+  <span class="ember" style="--x:23%;--t:13s;--d:9s;--drift:-20px"></span>
+  <span class="ember" style="--x:8%;--t:19s;--d:11s;--drift:120px"></span>
+  <span class="ember" style="--x:29%;--t:16s;--d:4.5s;--drift:40px"></span>
+  <span class="ember" style="--x:14%;--t:14s;--d:7.5s;--drift:-40px"></span>
+</div>
+
+<header class="bar">
+  <div class="wrap bar-inner">
+    <a class="brand" href="./"><span class="diamond"></span>Seamless Co-op<small>DS2</small></a>
+    <nav class="nav" aria-label="Разделы">
+      <a href="#features">Возможности</a>
+      <a href="#start">Как начать</a>
+      <a href="#shots">Скриншоты</a>
+      <a href="https://github.com/Restezzz/Seamless-DarkSouls2">GitHub</a>
+    </nav>
+    <a class="lang" href="../" hreflang="en" lang="en" title="English version">EN</a>
+  </div>
+</header>
+
+<main id="main">
+  <section class="hero wrap" aria-labelledby="title">
+    <p class="overline">Dark Souls II: Scholar of the First Sin · мод для ПК</p>
+    <h1 id="title"><span class="h1-main">Seamless <span class="nowrap">Co-op</span></span> <span class="h1-sub">бесшовный кооператив для Dark Souls 2</span></h1>
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <p class="lede">Пройдите всю игру вдвоём. Знак друга ставится сам, и твоя игра сама его призывает — откуда угодно, даже из Маджулы, — а кооп не разваливается после босса, смерти или перехода в новую локацию.</p>
+        <div class="cta">
+          <a class="btn btn-ember" href="https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+            Скачать последний релиз
+          </a>
+          <a class="btn btn-ghost" href="https://github.com/Restezzz/Seamless-DarkSouls2">
+            <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+            Исходный код на GitHub
+          </a>
+        </div>
+        <ul class="facts">
+          <li>Бесплатно, открытый код (MIT)</li>
+          <li>Steam-версия, Windows 10/11</li>
+          <li>Свой сервер: без вторжений и случайных людей</li>
+        </ul>
+      </div>
+      <figure class="hero-art">
+        <div class="hero-glow"></div>
+        <div class="shot-frame">
+          <img src="../screenshots/ru_lobby_guest.png" width="620" height="670" fetchpriority="high" alt="Кооп-меню в игре: ты в мире хоста, в лобби два игрока">
+        </div>
+        <img class="shot-toasts" src="../screenshots/ru_hud.png" width="500" height="250" alt="Уведомления: Seamless Co-op готов, игрок вошёл в лобби, хост сейчас вас призовёт">
+      </figure>
+    </div>
+  </section>
+
+  <section class="section" id="features" aria-labelledby="features-title">
+    <div class="wrap">
+      <p class="eyebrow">Что меняется</p>
+      <h2 id="features-title">Один призыв на всю игру</h2>
+      <div class="features-lead">
+        <span class="num" aria-hidden="true">01</span>
+        <div>
+          <h3>Призыв без ритуала, откуда угодно</h3>
+          <p>Зашёл в лобби из меню — и всё: знак появляется прямо у хоста под ногами, и его игра сама призывает. Не нужны куколки и мелки, таймер фантома не кончается, и это работает даже там, где знаки ставить нельзя.</p>
+        </div>
+      </div>
+      <ol class="feature-list">
+        <li><span class="num" aria-hidden="true">02</span><div><h3>Кооп не заканчивается</h3><p>Убийство босса, смерть, костёр и переход между локациями не отправляют гостя домой.</p></div></li>
+        <li><span class="num" aria-hidden="true">03</span><div><h3>Нет кооп-тумана</h3><p>Гость ходит по всему миру хоста, в том числе там, где призыв обычно невозможен.</p></div></li>
+        <li><span class="num" aria-hidden="true">04</span><div><h3>Костры для обоих</h3><p>Гость отдыхает у костров хоста, и отдых возвращает врагов у обоих игроков.</p></div></li>
+        <li><span class="num" aria-hidden="true">05</span><div><h3>Честный лут</h3><p>Подобранное гостем в мире хоста достаётся только ему и потом пропадает из его собственного мира — ничего не собирается дважды.</p></div></li>
+        <li><span class="num" aria-hidden="true">06</span><div><h3>Смерть не рвёт сессию</h3><p>Погибший гость сразу возвращается в мир хоста. Смерть хоста никого не выкидывает.</p></div></li>
+        <li><span class="num" aria-hidden="true">07</span><div><h3>Боссы вместе</h3><p>Хост первым проходит в туман босса, гость — за ним; никто не возвращается, пока бой не решится.</p></div></li>
+      </ol>
+      <p class="also"><strong>А ещё:</strong> гость может разговаривать с NPC; меню в игре на <kbd>F1</kbd> на русском и английском, лобби с паролем; возврат после вылета; журнал вылетов для отчётов и сервер в один клик для хоста.</p>
+    </div>
+  </section>
+
+  <section class="section" id="start" aria-labelledby="start-title">
+    <div class="wrap">
+      <p class="eyebrow">Как начать</p>
+      <h2 id="start-title">Настроить один раз — и играть</h2>
+      <div class="steps">
+        <article class="card card-need">
+          <h3><span>Каждому игроку</span>Что нужно</h3>
+          <ul>
+            <li><strong>Dark Souls II: Scholar of the First Sin</strong> в Steam (ПК)</li>
+            <li>Windows 10 или 11</li>
+            <li><a href="https://www.radmin-vpn.com/ru/">Radmin VPN</a> (бесплатный), все в одной сети</li>
+          </ul>
+        </article>
+        <article class="card">
+          <h3><span>Один раз</span>Хост</h3>
+          <ol>
+            <li>Распакуй архив <strong>host</strong> в папку игры <code>Game</code>, рядом с <code>DarkSoulsII.exe</code>.</li>
+            <li>Запусти <code>StartServer.bat</code> — он покажет адрес для друзей и создаст файл-ключ.</li>
+            <li>Отправь друзьям адрес и <code>ds2_server_public.key</code>.</li>
+          </ol>
+        </article>
+        <article class="card">
+          <h3><span>Один раз</span>Друг</h3>
+          <ol>
+            <li>Распакуй архив <strong>joiner</strong> в свою папку <code>Game</code>.</li>
+            <li>Положи туда же <code>ds2_server_public.key</code> от хоста.</li>
+            <li>Впиши адрес хоста после <code>server_ip=</code> в <code>ds2_seamless_coop.ini</code>.</li>
+          </ol>
+        </article>
+      </div>
+      <div class="play">
+        <h3>Дальше — играть</h3>
+        <p>Хост: <kbd>F1</kbd> → <b>Создать лобби</b> → пароль. Друг: <kbd>F1</kbd> → <b>Подключиться к другу</b> → адрес и пароль, потом встань где-нибудь (только не у костра) — игра хоста сама тебя призовёт.</p>
+      </div>
+      <a class="more" href="https://github.com/Restezzz/Seamless-DarkSouls2#readme">Полная инструкция, настройки и решение проблем — в README →</a>
+    </div>
+  </section>
+
+  <section class="section" id="shots" aria-labelledby="shots-title">
+    <div class="wrap">
+      <p class="eyebrow">Скриншоты</p>
+      <h2 id="shots-title">Меню в игре</h2>
+      <div class="shots" role="region" aria-label="Скриншоты" tabindex="0">
+        <figure>
+          <img src="../screenshots/ru_home.png" width="620" height="670" loading="lazy" alt="Кооп-меню: создать лобби или подключиться к другу">
+          <figcaption>Меню открывается на F1</figcaption>
+        </figure>
+        <figure>
+          <img src="../screenshots/ru_join.png" width="620" height="670" loading="lazy" alt="Подключение к другу: адрес хоста и пароль лобби">
+          <figcaption>Подключение к другу</figcaption>
+        </figure>
+        <figure>
+          <img src="../screenshots/ru_lobby_host.png" width="620" height="670" loading="lazy" alt="Лобби хоста со списком игроков">
+          <figcaption>Лобби хоста</figcaption>
+        </figure>
+        <figure>
+          <img src="../screenshots/ru_settings.png" width="620" height="670" loading="lazy" alt="Настройки: язык, клавиша меню и что синхронизируется">
+          <figcaption>Настройки</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="status-title">
+    <div class="wrap note">
+      <div>
+        <p class="eyebrow">Статус</p>
+        <h2 id="status-title">Честно: ранняя версия</h2>
+      </div>
+      <div>
+        <p>Пока в неё играли вдвоём. Известные проблемы и планы — в <a href="https://github.com/Restezzz/Seamless-DarkSouls2#readme">README</a>, об ошибках — в <a href="https://github.com/Restezzz/Seamless-DarkSouls2/issues">issues</a>, с приложенным логом.</p>
+        <p>Это независимый фанатский проект. Это <strong>не</strong> Seamless Co-op от LukeYui (тот ещё в разработке), и он не связан с FromSoftware или Bandai Namco.</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-inner">
+    <p>Вырос из <a href="https://github.com/scheissgeist/Seamless">scheissgeist/Seamless</a>. Сервер — <a href="https://github.com/TLeonardUK/ds3os">ds3os</a>, автор Tim Leonard. <a href="https://github.com/ocornut/imgui">Dear ImGui</a>, <a href="https://github.com/TsudaKageyu/minhook">MinHook</a>. Лицензия MIT.</p>
+    <p>Dark Souls принадлежит FromSoftware и Bandai Namco · <a href="../" hreflang="en" lang="en">English version</a></p>
+  </div>
+</footer>
+</body>
+</html>
