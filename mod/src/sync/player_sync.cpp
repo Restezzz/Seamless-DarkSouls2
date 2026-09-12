@@ -3088,6 +3088,10 @@ bool PlayerSync::Initialize() {
     // (docs §3.24). This also makes the partner solid on a host's screen.
     DS2Coop::Sync::SetNpcSolidEnabled(SeamlessCoopMod::GetInstance().GetConfig().npc_solid);
 
+    // What a join actually needs, captured from a normal summon: the groundwork
+    // for entering a world without a sign at all (join_direct.cpp, docs §3.27).
+    DS2Coop::Sync::InstallJoinProbe();
+
     // ... once the world it joined has finished putting those NPCs in at all
     // (MpActiveHook above, ini npc_spawn).
     g_npcSpawnLocal.store(SeamlessCoopMod::GetInstance().GetConfig().npc_spawn);

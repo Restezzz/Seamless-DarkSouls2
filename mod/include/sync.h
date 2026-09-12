@@ -123,6 +123,20 @@ uintptr_t GetPartnerCharacter(uint64_t maxAgeMs);
 // between them, because the meaning of those numbers has never been measured
 // and the ones in the old notes came from a bad memory scan.
 void PvpModesGameTick();   // game thread
+
+// Groundwork for a join with no summon sign at all (join_direct.cpp, docs
+// §3.27). A guest's entry is exe+0x2C6330, and three of the four paths into it
+// never involve a sign -- but the session descriptor it takes carries an opaque
+// payload that has to describe a genuinely live session. This watches a normal
+// summon and writes that descriptor down. It reads only.
+bool InstallJoinProbe();
+
+// A character's own death, below the session layer (chr_death.cpp, docs §3.28).
+// The game has no way to stand a dead character up again, but a death is only
+// *requested* by one byte and consumed later -- so it can be denied before it
+// happens. This only watches the local character's HP, that byte and the death
+// bits; it writes nothing.
+void ChrDeathTick();   // game thread
 void DeathSyncGameTick();             // game thread, every frame
 void NotePartnerLife(bool alive);     // the partner's own PlayerDeath / PlayerRespawn
 void NotePartnerBoss(int32_t active, int32_t phase);   // the host's boss fight (BossState)

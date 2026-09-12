@@ -16,6 +16,8 @@ add_library(ds2_seamless_coop SHARED
     sync/death_sync.cpp
     sync/npc_talk.cpp
     sync/pvp_modes.cpp
+    sync/join_direct.cpp
+    sync/chr_death.cpp
     utils/logger.cpp
     utils/crash_log.cpp
     utils/memory.cpp
