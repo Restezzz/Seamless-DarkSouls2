@@ -63,6 +63,14 @@ target_compile_options(ds2_seamless_coop PRIVATE
 # and the PDB kept per build (symbols/<md5>) turns that into a function name.
 target_compile_options(ds2_seamless_coop PRIVATE $<$<CONFIG:Release>:/Zi>)
 target_link_options(ds2_seamless_coop PRIVATE $<$<CONFIG:Release>:/DEBUG /OPT:REF /OPT:ICF>)
+# Only the PDB's file name goes into the DLL, not the builder's local path.
+# Debuggers match the PDB by its GUID, so symbols/<md5> keeps working.
+# The name is spelled out: the usual %_PDB% reached the linker mangled.
+target_link_options(ds2_seamless_coop PRIVATE $<$<CONFIG:Release>:/PDBALTPATH:ds2_seamless_coop.pdb>)
+
+# Version info in the file's properties, filled in from the project version
+configure_file(version.rc.in ${CMAKE_CURRENT_BINARY_DIR}/version.rc @ONLY)
+target_sources(ds2_seamless_coop PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 
 # Also build as dinput8.dll (drop-in auto-load, no launcher needed)
 add_custom_command(TARGET ds2_seamless_coop POST_BUILD

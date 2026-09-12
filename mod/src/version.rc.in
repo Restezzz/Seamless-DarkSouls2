@@ -1,0 +1,35 @@
+// Version resource of the mod DLL. CMake fills it in from project(... VERSION)
+// in mod/CMakeLists.txt, so there is nothing to bump here.
+// It is what Explorer shows in the file's properties, and anti-virus
+// heuristics treat a DLL without any version info as more suspicious.
+#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION     @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION  @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+ FILEFLAGS       0
+ FILEOS          VOS_NT_WINDOWS32
+ FILETYPE        VFT_DLL
+ FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Seamless-DarkSouls2 (open source)"
+            VALUE "FileDescription",  "Seamless Co-op for Dark Souls II: Scholar of the First Sin"
+            VALUE "FileVersion",      "@PROJECT_VERSION@"
+            VALUE "InternalName",     "ds2_seamless_coop"
+            VALUE "LegalCopyright",   "MIT License"
+            VALUE "OriginalFilename", "dinput8.dll"
+            VALUE "ProductName",      "Seamless Co-op for Dark Souls II"
+            VALUE "ProductVersion",   "@PROJECT_VERSION@"
+            VALUE "Comments",         "Source code: https://github.com/Restezzz/Seamless-DarkSouls2"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
