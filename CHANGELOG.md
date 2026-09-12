@@ -45,6 +45,17 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
   начало — практически ноль) и отправлял каждые десять секунд, а гость выбрасывал это в пользу неверного
   числа в своём файле. Заодно исчезает и лишний знак призыва под хостом в Маджуле — он ставился только
   потому, что «у этой карты нет начала».
+- Tested the same day, and worth naming which half of that fix did the work: a guest summoned into Majula
+  arrived 4 cm from the host — (4.34, 5.49, -17.75) against the host's (4.38, 5.49, -17.77) — and summoning
+  there works. The game's own origin query still answers for neither hand-measured map, so it is not yet
+  what supplies the number; what made the difference is that a stored origin no longer beats one the other
+  player measured. The per-map check is in and now says out loud when it cannot check.
+  Проверено в тот же день, и стоит назвать, какая именно половина правки сработала: гость, призванный в
+  Маджулу, появился в 4 см от хоста — (4.34, 5.49, -17.75) против (4.38, 5.49, -17.77) — и призыв туда
+  работает. Запрос начала карты у самой игры по-прежнему не отвечает ни про одну из карт, измеренных
+  руками, то есть источником числа она так и не стала; разницу дало то, что сохранённое начало больше не
+  побеждает измеренное вторым игроком. Проверка по одной карте на месте и теперь честно сообщает, когда
+  проверить не удалось.
 - The other player's bonfires are lit in this player's own set as well, when progress sharing is on. The
   session byte alone was not enough: all five of the host's bonfires reached the guest, 10670 sat there
   with its session byte set, and the travel menu still did not list it. The menu reads more than that
