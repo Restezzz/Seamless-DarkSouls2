@@ -58,6 +58,7 @@
 #include "../../include/utils.h"
 
 #include <atomic>
+#include <mutex>
 #include <cmath>
 #include <cstdint>
 
@@ -611,6 +612,148 @@ void TickTravelList(int Join) {
     }
 }
 
+// --- the other player's bonfires in this player's travel list -----------------
+// The game syncs a session's bonfires by itself, but only for the map the
+// players are in and at most sixteen of them (exe+0x17E910 packs, exe+0x17EA40
+// applies; docs §3.18). Measured on 12.09: the host had five lit and the set the
+// guest's list actually reads held two. So each player sends its whole set and
+// the other writes it into byte +0x03 of every matching record -- the session's
+// set, which the game zeroes by itself whenever it sets the view and never
+// writes to the save. A guest's own progress cannot be touched through it.
+//
+// Written from the game thread only; the packet arrives on the network thread
+// and is parked in the buffer below.
+constexpr uint32_t kMaxBonfires = 256;
+
+std::mutex        g_partnerBonfireMutex;
+uint16_t          g_partnerBonfireId[kMaxBonfires] = {};
+uint8_t           g_partnerBonfireFlags[kMaxBonfires] = {};
+uint32_t          g_partnerBonfireCount = 0;
+std::atomic<bool> g_partnerBonfiresNew{ false };
+
+// This player's own lit bonfires, out of byte +0x02 of every record.
+int CollectOwnBonfires(Network::BonfireEntry* Out, uint32_t Max) {
+    __try {
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+        if (!Gm) return -1;
+        const uintptr_t Events = *reinterpret_cast<const uintptr_t*>(Gm + 0x70);
+        if (!Events) return -1;
+        const uintptr_t List = *reinterpret_cast<const uintptr_t*>(Events + 0x58);
+        if (!List) return -1;
+        const uint32_t Records = *reinterpret_cast<const uint32_t*>(List + kTravelCount);
+        const uintptr_t Array = *reinterpret_cast<const uintptr_t*>(List + kTravelArray);
+        if (!Array || Records > 4096) return -1;
+        uint32_t Found = 0;
+        for (uint32_t I = 0; I < Records && Found < Max; ++I) {
+            const uintptr_t Record = Array + I * kTravelStride;
+            const uint8_t Own = *reinterpret_cast<const uint8_t*>(Record + 2);
+            if ((Own & 1) == 0) continue;
+            Out[Found].id = *reinterpret_cast<const uint16_t*>(Record);
+            Out[Found].flags = Own;
+            ++Found;
+        }
+        return static_cast<int>(Found);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
+// The other player's set into byte +0x03. Returns how many bytes changed.
+int WriteSessionBonfires(const uint16_t* Ids, const uint8_t* Flags, uint32_t Count) {
+    __try {
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+        if (!Gm) return -1;
+        const uintptr_t Events = *reinterpret_cast<const uintptr_t*>(Gm + 0x70);
+        if (!Events) return -1;
+        const uintptr_t List = *reinterpret_cast<const uintptr_t*>(Events + 0x58);
+        if (!List) return -1;
+        const uint32_t Records = *reinterpret_cast<const uint32_t*>(List + kTravelCount);
+        const uintptr_t Array = *reinterpret_cast<const uintptr_t*>(List + kTravelArray);
+        if (!Array || Records > 4096) return -1;
+        int Written = 0;
+        for (uint32_t I = 0; I < Records; ++I) {
+            const uintptr_t Record = Array + I * kTravelStride;
+            const uint16_t Id = *reinterpret_cast<const uint16_t*>(Record);
+            for (uint32_t K = 0; K < Count; ++K) {
+                if (Ids[K] != Id) continue;
+                uint8_t* Session = reinterpret_cast<uint8_t*>(Record + 3);
+                if (*Session != Flags[K]) {
+                    *Session = Flags[K];
+                    ++Written;
+                }
+                break;
+            }
+        }
+        return Written;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
+void SendOwnBonfires() {
+    Network::BonfireListPacket Packet{};
+    const int Found = CollectOwnBonfires(Packet.entries, kMaxBonfires);
+    if (Found <= 0) return;
+    Packet.header.magic = 0x44533243;
+    Packet.header.type = Network::PacketType::BonfireList;
+    Packet.header.size = sizeof(Packet);
+    Packet.count = static_cast<uint32_t>(Found);
+    Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
+    static int s_lastSent = -1;
+    if (Found != s_lastSent) {
+        s_lastSent = Found;
+        LOG_INFO("[BONFIRE] telling the other player about %d lit bonfires of mine", Found);
+    }
+}
+
+// No lock is held while the game's memory is written: the copy is taken first.
+void ApplyPartnerBonfires() {
+    uint16_t Ids[kMaxBonfires] = {};
+    uint8_t  Flags[kMaxBonfires] = {};
+    uint32_t Count = 0;
+    {
+        std::lock_guard<std::mutex> Lock(g_partnerBonfireMutex);
+        Count = g_partnerBonfireCount;
+        for (uint32_t I = 0; I < Count; ++I) {
+            Ids[I] = g_partnerBonfireId[I];
+            Flags[I] = g_partnerBonfireFlags[I];
+        }
+    }
+    if (!Count) return;
+    const int Written = WriteSessionBonfires(Ids, Flags, Count);
+    static int s_lastWritten = -2;
+    if (Written != s_lastWritten) {
+        s_lastWritten = Written;
+        if (Written < 0) {
+            LOG_WARNING("[BONFIRE] could not write the other player's bonfires into the travel list");
+        } else {
+            LOG_INFO("[BONFIRE] the other player's %u bonfires are in my travel list (%d record(s) changed)",
+                     Count, Written);
+        }
+    }
+}
+
+// The host sends its set; a guest writes the one it was sent, again and again,
+// because the game empties that set itself whenever it decides which one the
+// list reads.
+void TickBonfireSync(int Join) {
+    auto& Lobby = Session::SessionManager::GetInstance();
+    if (!Lobby.IsActive()) return;
+    const ULONGLONG Now = GetTickCount64();
+    static ULONGLONG s_sentAt = 0;
+    static ULONGLONG s_appliedAt = 0;
+    if (Lobby.IsHost()) {
+        if (Now - s_sentAt < 5000) return;
+        s_sentAt = Now;
+        SendOwnBonfires();
+        return;
+    }
+    if (Join != kJoinInWorld) return;
+    if (!g_partnerBonfiresNew.exchange(false) && Now - s_appliedAt < 3000) return;
+    s_appliedAt = Now;
+    ApplyPartnerBonfires();
+}
+
 void TickHold(int Join, int32_t Hp) {
     if (!g_hold.Active) return;
     const ULONGLONG Now = GetTickCount64();
@@ -712,6 +855,7 @@ void DeathSyncGameTick() {
     TickBoss(Join);
     TickArrival(Join);
     TickTravelList(Join);
+    TickBonfireSync(Join);
     TickHold(Join, Hp);
     TickRejoin(Join, Hp);
 }
@@ -719,6 +863,18 @@ void DeathSyncGameTick() {
 void NotePartnerLife(bool Alive) {
     const bool Was = g_partnerAlive.exchange(Alive);
     if (Alive && !Was) g_partnerBackAt.store(GetTickCount64());
+}
+
+void NotePartnerBonfires(const void* entries, uint32_t count) {
+    if (!entries) return;
+    const auto* From = static_cast<const Network::BonfireEntry*>(entries);
+    std::lock_guard<std::mutex> Lock(g_partnerBonfireMutex);
+    g_partnerBonfireCount = count > kMaxBonfires ? kMaxBonfires : count;
+    for (uint32_t I = 0; I < g_partnerBonfireCount; ++I) {
+        g_partnerBonfireId[I] = From[I].id;
+        g_partnerBonfireFlags[I] = From[I].flags;
+    }
+    g_partnerBonfiresNew.store(true);
 }
 
 void NotePartnerBoss(int32_t Active, int32_t Phase) {

@@ -387,31 +387,54 @@ static void CheckGameOriginOnce() {
              : "NOT trusted -- only maps measured here or sent by the other player");
 }
 
-// The origin to aim a sign into a map with: measured here, sent by the other
-// player, or -- once the check above has passed -- read from the game.
+// The origin to aim a sign into a map with. The game's own answer comes first,
+// because a value measured from a sign can be wrong -- and one of them was.
+// Majula came out as (10.53, 5.92, -16.25), which is simply where the player who
+// placed that sign stood: a sign in Majula only goes down through the mod's own
+// fallback spot, that spot carried coordinates of zero, and "my position minus
+// zero" is my position. The wrong number was then kept on disk and handed to the
+// other player, and the guest went on being summoned off the map and dying there
+// (12.09, 04:52 and 04:54). So the game is asked first and a stored value that
+// disagrees with it is thrown away.
 static bool LookupMapOrigin(uint32_t area, MapOrigin* out) {
     if (!area || !out) return false;
+    MapOrigin stored{};
+    bool haveStored = false;
     {
         std::lock_guard<std::mutex> lock(g_originMutex);
         LoadMapOrigins();
         auto it = g_mapOrigins.find(area);
         if (it != g_mapOrigins.end()) {
-            *out = it->second;
-            return true;
+            stored = it->second;
+            haveStored = true;
         }
     }
     CheckGameOriginOnce();
-    if (g_gameOriginTrust.load() != 1) return false;
-    MapOrigin got{};
-    if (!QueryGameMapOrigin(area, &got)) return false;
-    {
-        std::lock_guard<std::mutex> lock(g_originMutex);
-        g_mapOrigins[area] = got;
-        SaveMapOrigins();
+    MapOrigin fromGame{};
+    if (g_gameOriginTrust.load() == 1 && QueryGameMapOrigin(area, &fromGame)) {
+        const bool same = haveStored && fabsf(stored.x - fromGame.x) < 0.1f &&
+                          fabsf(stored.y - fromGame.y) < 0.1f && fabsf(stored.z - fromGame.z) < 0.1f;
+        {
+            std::lock_guard<std::mutex> lock(g_originMutex);
+            g_mapOrigins[area] = fromGame;
+            SaveMapOrigins();
+        }
+        if (!haveStored) {
+            LOG_INFO("[SIGN] map %u origin read from the game: (%.2f, %.2f, %.2f)",
+                     area, fromGame.x, fromGame.y, fromGame.z);
+        } else if (!same) {
+            LOG_WARNING("[SIGN] map %u was stored as (%.2f, %.2f, %.2f) and the game says (%.2f, %.2f, %.2f) "
+                        "-- the game wins and the stored one is thrown away",
+                        area, stored.x, stored.y, stored.z, fromGame.x, fromGame.y, fromGame.z);
+        }
+        *out = fromGame;
+        return true;
     }
-    LOG_INFO("[SIGN] map %u origin read from the game: (%.2f, %.2f, %.2f)", area, got.x, got.y, got.z);
-    *out = got;
-    return true;
+    if (haveStored) {
+        *out = stored;
+        return true;
+    }
+    return false;
 }
 
 // Read a protobuf varint. Returns the value, advances the offset.
@@ -800,17 +823,26 @@ static void AimSignAtOtherPlayer(uint8_t* data, size_t len) {
 
     constexpr float kScale = 32.0f;
 
-    // Whatever else happens, this sign teaches us where this map's origin is.
+    // This sign can teach us where this map's origin is -- but only where the
+    // game cannot say it itself. Measuring it from a sign whose spot the mod had
+    // to invent produced the player's own position instead of an origin, and
+    // that wrong number is what kept summoning the guest off the map in Majula.
     const uint32_t myArea = g_localAreaId.load();
     if (myArea) {
-        std::lock_guard<std::mutex> lock(g_originMutex);
-        LoadMapOrigins();
-        const MapOrigin o{ mx - sx / kScale, my - sy / kScale, mz - sz / kScale };
-        auto it = g_mapOrigins.find(myArea);
-        const bool isNew = (it == g_mapOrigins.end());
-        g_mapOrigins[myArea] = o;
-        if (isNew) LOG_INFO("[SIGN] map %u origin learned: (%.2f, %.2f, %.2f)", myArea, o.x, o.y, o.z);
-        SaveMapOrigins();
+        CheckGameOriginOnce();
+        MapOrigin fromGame{};
+        const bool gameKnows = g_gameOriginTrust.load() == 1 && QueryGameMapOrigin(myArea, &fromGame);
+        if (!gameKnows) {
+            std::lock_guard<std::mutex> lock(g_originMutex);
+            LoadMapOrigins();
+            const MapOrigin o{ mx - sx / kScale, my - sy / kScale, mz - sz / kScale };
+            auto it = g_mapOrigins.find(myArea);
+            const bool isNew = (it == g_mapOrigins.end());
+            g_mapOrigins[myArea] = o;
+            if (isNew) LOG_INFO("[SIGN] map %u origin learned from my own sign: (%.2f, %.2f, %.2f)",
+                                myArea, o.x, o.y, o.z);
+            SaveMapOrigins();
+        }
     }
 
     if (!g_signUnderFeet.load()) return;

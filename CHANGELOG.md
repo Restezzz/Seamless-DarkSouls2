@@ -6,6 +6,44 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 Каждая версия лежит на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) двумя
 архивами: `Seamless-DS2-<версия>-host.zip` для хоста и `Seamless-DS2-<версия>-joiner.zip` для друзей.
 
+## 0.1.4 — 2026-09-12
+
+**Fixed / Исправлено**
+
+- Majula, and this time with the cause named. The origin that a sign's coordinates are measured against was
+  taken from the mod's own file, where Majula sat as (10.53, 5.92, -16.25) — not an origin at all, but the
+  position of whoever had placed a sign there. In Majula a sign only goes down through the mod's fallback spot,
+  that spot carries zeroes, and "my position minus zero" is my position. The wrong number was then kept on disk
+  and handed to the other player, so the guest kept being summoned off the map and dying on arrival. The game's
+  own answer comes first now, and a stored value that disagrees with it is thrown away.
+  Маджула, и на этот раз с названной причиной. Начало карты, относительно которого считаются координаты знака,
+  брали из собственного файла мода, а там для Маджулы лежало (10.53, 5.92, -16.25) — это вообще не начало, а
+  позиция того, кто ставил там знак. В Маджуле знак ставится только через подменённое модом место, координаты в
+  нём нулевые, и «моя позиция минус ноль» даёт мою позицию. Неверное число сохранилось на диск и уехало второму
+  игроку, поэтому гостя и продолжало выкидывать за карту со смертью при появлении. Теперь первым спрашивается
+  сама игра, а расходящееся сохранённое значение выбрасывается.
+- The host's bonfires go into the guest's travel list. The game syncs a session's bonfires by itself, but only
+  for the map the players are in and at most sixteen of them: measured on 12.09, the host had five lit and the
+  set the guest's list reads held two. All of them are sent now. The byte this writes is never saved, so nobody's
+  own progress is touched.
+  Костры хоста попадают в список перемещения гостя. Игра синхронизирует костры сессии сама, но только для той
+  карты, где стоят игроки, и не больше шестнадцати: по замеру 12.09 у хоста было зажжено пять, а в наборе, из
+  которого читает список гостя, лежало два. Теперь отправляются все. Байт, в который это пишется, никогда не
+  сохраняется, поэтому чужой прогресс не затрагивается.
+
+**Changed / Изменено**
+
+- `npc_spawn` is off by default. The call site fires — 24 000 times in one session — and the NPCs stay exactly as
+  missing and as see-through, so this is not what hides them, and it changes what the game does for nothing.
+  `npc_spawn` по умолчанию выключен. Вызов срабатывает — 24 000 раз за сессию — и NPC остаются ровно так же
+  пропавшими и прозрачными, значит скрывает их не это, а игра меняется впустую.
+- `npc_talk` (forcing the "Talk" prompt open for a guest) is off by default. It never produced a single prompt,
+  and the game crashed reading address 0 at exe+0x18B10E, called from exe+0x4534A6 — the destructor path of the
+  prompt object itself, the code this reaches into. Not proven; that is precisely why it is off.
+  `npc_talk` (принудительная подсказка «Поговорить» у гостя) по умолчанию выключен. Подсказка не появилась ни
+  разу, а игра вылетела с чтением по адресу 0 в exe+0x18B10E из exe+0x4534A6 — это путь деструктора самого
+  объекта подсказки, того кода, в который влезает эта правка. Не доказано — именно поэтому и выключено.
+
 ## 0.1.3 — 2026-09-12
 
 **Fixed / Исправлено**

@@ -80,6 +80,11 @@ void NoteHostCrossedBossFog(uint32_t flag);
 // Whether a boss fog makes a guest wait for the other player at all. Off: the
 // fog behaves as it does for a host, which is what 0.1.0 did.
 void SetBossFogWait(bool on);
+// Every bonfire the other player has lit (packet BonfireList). A guest's travel
+// list reads the session's set, which the game fills with the current map only
+// and sixteen entries at most; this fills the rest. The byte it writes is never
+// saved, so the guest's own progress is untouched.
+void NotePartnerBonfires(const void* entries, uint32_t count);
 
 // Deaths in co-op (death_sync.cpp). A guest who dies -- or whose host dies --
 // goes home the game's way and is brought straight back to the partner's world,
@@ -89,6 +94,10 @@ bool InstallDeathSync(bool enabled);
 // A guest can talk to NPCs in the host's world: the talk prompt turns every
 // phantom down, and is answered "yes" for the local guest (npc_talk.cpp).
 bool InstallNpcTalk();
+// Whether that answer is actually forced. Off by default: it produced no prompt
+// at all in two sessions, and a crash reading address 0 came out of the same
+// prompt code (ini npc_talk).
+void SetNpcTalkEnabled(bool on);
 void DeathSyncGameTick();             // game thread, every frame
 void NotePartnerLife(bool alive);     // the partner's own PlayerDeath / PlayerRespawn
 void NotePartnerBoss(int32_t active, int32_t phase);   // the host's boss fight (BossState)

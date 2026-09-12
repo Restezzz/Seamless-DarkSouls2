@@ -75,6 +75,13 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
             }
             break;
 
+        case PacketType::BonfireList:
+            if (packet->size >= sizeof(BonfireListPacket)) {
+                const auto* List = reinterpret_cast<const BonfireListPacket*>(packet);
+                DS2Coop::Sync::NotePartnerBonfires(List->entries, List->count);
+            }
+            break;
+
         case PacketType::BossDoorCrossed:
             if (packet->size >= sizeof(BossDoorPacket)) {
                 const auto* Door = reinterpret_cast<const BossDoorPacket*>(packet);

@@ -69,6 +69,13 @@ using PromptAllowedFn = uint64_t(__fastcall*)(void*, const uint8_t*);
 void* g_promptAllowedOriginal = nullptr;
 std::atomic<uintptr_t> g_lastOpenedPrompt{ 0 };   // for the log: one line per prompt
 
+// Off unless the ini asks for it. Two sessions with this forced open produced no
+// prompt whatsoever -- the NPCs are not in the guest's world to begin with --
+// and the game then crashed reading address 0 at exe+0x18B10E, called from
+// exe+0x4534A6, which is inside this same prompt code. That is a suspicion and
+// not a proof, and a suspicion is reason enough to leave it off.
+std::atomic<bool> g_talkEnabled{ false };
+
 uintptr_t ExeBase() {
     static const uintptr_t Base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
     return Base;
@@ -110,7 +117,7 @@ bool IsGuestInHostWorld() {
 // Returns a bool in AL; the rest of RAX is passed through untouched.
 uint64_t __fastcall PromptAllowedDetour(void* Chr, const uint8_t* Flags) {
     const uint64_t Stock = reinterpret_cast<PromptAllowedFn>(g_promptAllowedOriginal)(Chr, Flags);
-    if ((Stock & 0xFF) != 0) return Stock;
+    if ((Stock & 0xFF) != 0 || !g_talkEnabled.load()) return Stock;
     if (reinterpret_cast<uintptr_t>(_ReturnAddress()) != ExeBase() + kPromptEnterRet) return Stock;
     if (!Chr || reinterpret_cast<uintptr_t>(Chr) != LocalPlayer() || !IsGuestInHostWorld()) return Stock;
     const uintptr_t Prompt = reinterpret_cast<uintptr_t>(Flags) - kFlagsInPrompt;
@@ -157,6 +164,13 @@ void __fastcall TakeDownDetour(void* A, void* B, void* C, void* D) {
 }
 
 } // namespace
+
+void SetNpcTalkEnabled(bool on) {
+    g_talkEnabled.store(on);
+    LOG_INFO("[TALK] the talk prompt for a guest: %s", on
+             ? "forced open (npc_talk=true)"
+             : "left as the game has it (npc_talk=false)");
+}
 
 bool InstallNpcTalk() {
     static bool Installed = false;
