@@ -6,6 +6,46 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 Каждая версия лежит на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) двумя
 архивами: `Seamless-DS2-<версия>-host.zip` для хоста и `Seamless-DS2-<версия>-joiner.zip` для друзей.
 
+## 0.1.2 — 2026-09-12
+
+What the two players found in 0.1.1.
+Что нашли в 0.1.1 два игрока.
+
+**Fixed / Исправлено**
+
+- Being summoned to the host in Majula killed the guest on arrival. A sign's coordinates are kept against the
+  map's own origin, and the guest's sign was left in the frame of its own map, so the guest appeared off the map
+  and died within seconds. A sign that cannot be aimed is no longer placed at all, and the origin of the map a
+  player stands in is measured and sent to the other player, so any area works.
+  Призыв к хосту в Маджуле убивал гостя сразу после появления. Координаты знака хранятся относительно начала
+  карты, а знак гостя оставался в системе координат его собственной карты, поэтому гость появлялся вне карты и
+  погибал за считаные секунды. Знак, который невозможно прицелить, больше не ставится вовсе, а начало карты, в
+  которой стоит игрок, измеряется и передаётся второму игроку — теперь работает любая локация.
+- The guest had to wait at the boss fog until the host had already started the fight, so a host waiting at the fog
+  locked both players out. Whoever goes through now tells the other player, and that fog lets them follow at once.
+  Гость ждал у тумана босса, пока хост не начнёт бой, поэтому хост, ждущий у тумана, запирал обоих. Теперь
+  прошедший сквозь туман сообщает об этом второму игроку, и тот же туман сразу пропускает его следом.
+
+**Changed / Изменено**
+
+- The log no longer fills up with door states: two doors shared one slot of the "last state" table and wrote a
+  line every frame — 35 000 lines in 13 minutes.
+  Лог больше не забивается состояниями дверей: две двери делили одну ячейку таблицы «последнее состояние» и писали
+  строку каждый кадр — 35 000 строк за 13 минут.
+- `dinput8.dll` now carries its name and version in the file's properties, and no longer the local path of the
+  machine it was built on. Anti-virus heuristics flag a file without version info more readily.
+  У `dinput8.dll` теперь есть название и версия в свойствах файла, а локального пути сборочной машины внутри
+  больше нет. Файлы без сведений о версии эвристики антивирусов помечают чаще.
+
+**Still open / Ещё не сделано**
+
+- NPCs are invisible or transparent for the guest, so there is nothing to talk to.
+  У гостя NPC невидимы или прозрачны, поэтому говорить не с кем.
+- The guest's fast-travel list does not include the host's bonfires.
+  В списке перемещения у гостя нет костров хоста.
+- The guest still cannot start a boss fight by itself; it can now follow the host in at once.
+  Гость по-прежнему не может сам запустить бой с боссом; зато теперь сразу проходит за хостом.
+
 ## 0.1.1 — 2026-09-12
 
 What two players found in 0.1.0.

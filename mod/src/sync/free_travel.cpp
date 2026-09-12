@@ -45,6 +45,8 @@
 
 #include "../../include/sync.h"
 #include "../../include/hooks.h"
+#include "../../include/network.h"
+#include "../../include/session.h"
 #include "../../include/ui.h"
 #include "../../include/ui_settings.h"
 #include "../../include/utils.h"
@@ -246,6 +248,49 @@ DoorSlot g_doorSlots[512] = {};
 std::atomic<int32_t>   g_lastPhantomId{ -3 };
 std::atomic<ULONGLONG> g_phantomCheckAt{ 0 };
 
+// --- boss fogs the world's owner is already through --------------------------
+// A boss fog (kind 1) reads state 3 for the player who walked through it, and
+// the other player's copy of that door never learns it: on 12.09 the host went
+// in at 05:49:04 and the guest's copy stayed a wall (15 755 frames of it) until
+// a fight was already running. So the one who goes through says so, by the
+// door's event flag -- the same number in both games -- and the other one's copy
+// opens. Kept small and cleared when the session ends.
+constexpr size_t kCrossedFogSlots = 8;
+std::atomic<uint32_t> g_crossedFog[kCrossedFogSlots] = {};
+std::atomic<size_t>   g_crossedFogNext{ 0 };
+
+bool FogCrossed(uint32_t Flag) {
+    if (!Flag) return false;
+    for (const auto& Slot : g_crossedFog) {
+        if (Slot.load() == Flag) return true;
+    }
+    return false;
+}
+
+void RememberCrossedFog(uint32_t Flag) {
+    if (!Flag || FogCrossed(Flag)) return;
+    g_crossedFog[g_crossedFogNext.fetch_add(1) % kCrossedFogSlots].store(Flag);
+}
+
+void ForgetCrossedFogs() {
+    for (auto& Slot : g_crossedFog) Slot.store(0);
+}
+
+// The world's owner tells the guest, once per fog.
+void TellPartnerAboutFog(uint32_t Flag) {
+    if (!Flag || FogCrossed(Flag)) return;
+    auto& Lobby = Session::SessionManager::GetInstance();
+    if (!Lobby.IsActive() || !Lobby.IsHost()) return;
+    RememberCrossedFog(Flag);
+    Network::BossDoorPacket Packet{};
+    Packet.header.magic = 0x44533243;
+    Packet.header.type = Network::PacketType::BossDoorCrossed;
+    Packet.header.size = sizeof(Packet);
+    Packet.flag = Flag;
+    Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
+    LOG_INFO("[TRAVEL] through the boss fog (flag %u) -- telling the other player, so it can follow", Flag);
+}
+
 void NotePhantomId() {
     const ULONGLONG Now = GetTickCount64();
     if (Now < g_phantomCheckAt.load()) return;
@@ -254,13 +299,35 @@ void NotePhantomId() {
     if (Id != g_lastPhantomId.exchange(Id)) {
         LOG_INFO("[TRAVEL] local phantom id %d (session role %d)", Id, ReadSessionRole());
     }
+    if (ReadSessionRole() <= 0) ForgetCrossedFogs();   // between sessions
+}
+
+// True when this door has not been logged in this state yet. Two doors whose
+// addresses fall in the same slot used to evict each other and log every frame
+// (12.09: 35 000 lines in 13 minutes, a 23 MB log), so a door now looks for a
+// slot of its own among a few before any slot is reused.
+bool DoorStateIsNew(uintptr_t Door, uint8_t State) {
+    const size_t Slots = _countof(g_doorSlots);
+    const size_t Home = static_cast<size_t>((Door >> 4) % Slots);
+    for (size_t Step = 0; Step < 8; ++Step) {
+        DoorSlot& Slot = g_doorSlots[(Home + Step) % Slots];
+        if (Slot.Door == Door) {
+            if (Slot.State == State) return false;
+            Slot.State = State;
+            return true;
+        }
+        if (!Slot.Door) {
+            Slot = DoorSlot{ Door, State };
+            return true;
+        }
+    }
+    // Eight doors already share this slot: keep the newest one.
+    g_doorSlots[Home] = DoorSlot{ Door, State };
+    return true;
 }
 
 void NoteDoor(uintptr_t Door, uint8_t State) {
-    DoorSlot& Slot = g_doorSlots[(Door >> 4) % _countof(g_doorSlots)];
-    if (Slot.Door == Door && Slot.State == State) return;
-    Slot.Door = Door;
-    Slot.State = State;
+    if (!DoorStateIsNew(Door, State)) return;
     DoorInfo Info{};
     if (!ReadDoor(Door, &Info)) return;
     LOG_INFO("[TRAVEL] door %p: kind %u, stored role %d, session role %d, flag %u -> state %u (%s)",
@@ -296,11 +363,15 @@ bool IsGuestInWorld() {
 uint64_t __fastcall DoorStateDetour(void* Door) {
     uint64_t Result = reinterpret_cast<DoorStateFn>(g_doorStateOriginal)(Door);
     const uint8_t Stock = static_cast<uint8_t>(Result);
-    if ((Stock == 2 || Stock == 3) && GroupPatched(kDoorSites, _countof(kDoorSites)) && IsGuestInWorld()) {
+    if ((Stock == 2 || Stock == 3) && GroupPatched(kDoorSites, _countof(kDoorSites))) {
         DoorInfo Info{};
         if (ReadDoor(reinterpret_cast<uintptr_t>(Door), &Info) && Info.Kind == 1) {
-            const bool Open = Stock == 3 || IsHostInBossFight();
-            Result = (Result & ~static_cast<uint64_t>(0xFF)) | (Open ? 0u : 4u);   // 0 open, 4 wall
+            if (IsGuestInWorld()) {
+                const bool Open = Stock == 3 || FogCrossed(Info.Flag) || IsHostInBossFight();
+                Result = (Result & ~static_cast<uint64_t>(0xFF)) | (Open ? 0u : 4u);   // 0 open, 4 wall
+            } else if (Stock == 3) {
+                TellPartnerAboutFog(Info.Flag);
+            }
         }
     }
     NoteDoor(reinterpret_cast<uintptr_t>(Door), static_cast<uint8_t>(Result));
@@ -397,6 +468,12 @@ bool InstallFreeTravel(bool Enabled) {
     LOG_INFO("[TRAVEL] free travel %s -- applied on the game thread once the world runs",
              Enabled ? "requested" : "off (free_travel=false)");
     return true;
+}
+
+void NoteHostCrossedBossFog(uint32_t flag) {
+    if (!flag || FogCrossed(flag)) return;
+    RememberCrossedFog(flag);
+    LOG_INFO("[TRAVEL] the other player is through the boss fog (flag %u) -- it lets me in now", flag);
 }
 
 void ToggleFreeTravelDoors() {

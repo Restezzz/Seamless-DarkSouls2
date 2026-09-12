@@ -7,7 +7,7 @@
 namespace DS2Coop {
 
 // Version information
-constexpr const char* MOD_VERSION = "0.1.1";  // keep in step with VERSION and CMakeLists.txt
+constexpr const char* MOD_VERSION = "0.1.2";  // keep in step with VERSION and CMakeLists.txt
 constexpr const char* MOD_NAME = "Dark Souls 2 Seamless Co-op";
 
 // Game version support

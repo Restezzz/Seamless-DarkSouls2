@@ -74,6 +74,9 @@ bool InstallFreeTravel(bool enabled);
 void ToggleFreeTravelDoors();
 void ToggleFreeTravelCrossing();
 void FreeTravelGameTick();   // writes the requested bytes, on the game thread only
+// A boss fog the host has walked through (packet BossDoorCrossed): the guest's
+// own copy of that door cannot see it, so without this it stays a wall.
+void NoteHostCrossedBossFog(uint32_t flag);
 
 // Deaths in co-op (death_sync.cpp). A guest who dies -- or whose host dies --
 // goes home the game's way and is brought straight back to the partner's world,

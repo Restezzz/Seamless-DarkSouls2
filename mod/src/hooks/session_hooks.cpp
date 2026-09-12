@@ -602,6 +602,69 @@ void SetNextSignTarget(uint32_t area, float x, float y, float z) {
     g_signTarget = SignTarget{ true, area, x, y, z };
     LOG_INFO("[SIGN] next sign aimed at map %u (%.2f, %.2f, %.2f)", area, x, y, z);
 }
+
+// Can a sign be aimed into this map at all? Its own map always can (the origins
+// cancel); any other map needs that map's origin. A sign that cannot be aimed
+// must not be placed: its numbers would be read against the other map's origin,
+// which is how a guest ended up off the map in Majula and died on arrival.
+bool IsMapOriginKnown(uint32_t area) {
+    if (!area) return false;
+    if (area == g_localAreaId.load()) return true;
+    std::lock_guard<std::mutex> lock(g_originMutex);
+    LoadMapOrigins();
+    return g_mapOrigins.find(area) != g_mapOrigins.end();
+}
+
+// The other player measured the origin of the map it is standing in and sent it
+// over. Kept like a locally learned one, on disk included.
+void NoteRemoteMapOrigin(uint32_t area, float x, float y, float z) {
+    if (!area) return;
+    std::lock_guard<std::mutex> lock(g_originMutex);
+    LoadMapOrigins();
+    auto it = g_mapOrigins.find(area);
+    if (it != g_mapOrigins.end()) return;   // ours was measured here; keep it
+    g_mapOrigins[area] = MapOrigin{ x, y, z };
+    SaveMapOrigins();
+    LOG_INFO("[SIGN] map %u origin from the other player: (%.2f, %.2f, %.2f) -- signs can be aimed into it now",
+             area, x, y, z);
+}
+
+// Tell the other player the origin of the map this player is standing in, so it
+// can aim a sign into it. Only whoever has stood in a map knows its origin, so
+// this is the only way the other side can get it without having been there.
+// Repeated on a slow timer: it costs 24 bytes and it has to survive a join that
+// happened before this player arrived in the map.
+void ShareLocalMapOrigin() {
+    uint32_t area = 0;
+    float x = 0, y = 0, z = 0;
+    if (!GetLocalMapOrigin(&area, &x, &y, &z)) return;
+    static std::atomic<uint32_t>  lastArea{ 0 };
+    static std::atomic<ULONGLONG> lastAt{ 0 };
+    const ULONGLONG now = GetTickCount64();
+    if (lastArea.load() == area && now - lastAt.load() < 10000) return;
+    lastArea.store(area);
+    lastAt.store(now);
+    DS2Coop::Network::MapOriginPacket packet{};
+    packet.header.magic = 0x44533243;
+    packet.header.type = DS2Coop::Network::PacketType::MapOriginInfo;
+    packet.header.size = sizeof(packet);
+    packet.area = area;
+    packet.x = x; packet.y = y; packet.z = z;
+    DS2Coop::Network::PeerManager::GetInstance().BroadcastPacket(&packet.header);
+}
+
+// The origin of the map this player is standing in, to send to the other one.
+bool GetLocalMapOrigin(uint32_t* area, float* x, float* y, float* z) {
+    const uint32_t here = g_localAreaId.load();
+    if (!here || !area || !x || !y || !z) return false;
+    std::lock_guard<std::mutex> lock(g_originMutex);
+    LoadMapOrigins();
+    auto it = g_mapOrigins.find(here);
+    if (it == g_mapOrigins.end()) return false;
+    *area = here;
+    *x = it->second.x; *y = it->second.y; *z = it->second.z;
+    return true;
+}
 }
 
 // Write the sign out at the other player's position instead of my own.

@@ -45,6 +45,17 @@ enum class PacketType : uint8_t {
     // seconds while it runs. The guest's own game does not run the host's
     // battle, so this is how the guest knows one is on (death_sync.cpp).
     BossState = 0x37,
+    // The origin a map's sign coordinates are measured against, as measured by
+    // the player standing in that map. Without it a sign cannot be aimed into
+    // that map at all: on 12.09 a guest was summoned into Majula with its sign
+    // still written in its own map's frame, landed off the map and died on
+    // arrival, twice in a row (session_hooks.cpp).
+    MapOriginInfo = 0x38,
+    // "I have walked through the boss fog whose event flag is this one." The
+    // guest's copy of that door cannot see the host go through, so it stayed a
+    // wall until a fight was already running -- on 12.09 the guest stood at the
+    // fog for five minutes (free_travel.cpp).
+    BossDoorCrossed = 0x39,
 
     // Custom data
     ChatMessage = 0x40,
@@ -111,6 +122,17 @@ struct BossStatePacket {
     PacketHeader header;
     int32_t active;   // EventBossBattleManager+0x14: the battle running (0 none)
     int32_t phase;    // +0x204: 1 fighting, 2 won, 3 cleanup
+};
+
+struct MapOriginPacket {
+    PacketHeader header;
+    uint32_t area;      // online area id (10040000 = Majula)
+    float x, y, z;      // sign coordinate = 32 * (world - origin)
+};
+
+struct BossDoorPacket {
+    PacketHeader header;
+    uint32_t flag;      // the door param's event flag: the same number in both games
 };
 #pragma pack(pop)
 

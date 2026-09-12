@@ -94,6 +94,14 @@ void NoteSummonRequest();
 // bonfire. Ignored unless the spot lies in the map the other player is in.
 void SetNextSignTarget(uint32_t area, float x, float y, float z);
 
+// Sign coordinates are stored as 32 * (world - origin) with an origin of their
+// own per map, so aiming a sign into another map needs that map's origin, and a
+// sign that cannot be aimed must not be placed at all.
+bool IsMapOriginKnown(uint32_t area);
+void NoteRemoteMapOrigin(uint32_t area, float x, float y, float z);   // packet MapOriginInfo
+bool GetLocalMapOrigin(uint32_t* area, float* x, float* y, float* z);
+void ShareLocalMapOrigin();   // tell the other player about the map I am standing in
+
 namespace ProtobufHooks {
     bool InstallHooks();
     void UninstallHooks();

@@ -1661,6 +1661,68 @@ void*                 g_signTickOriginal = nullptr;
 std::atomic<void*>    g_signManager{ nullptr };
 std::atomic<bool>     g_placeSignPending{ false };
 
+// Can a sign that goes down now be aimed at the other player?
+//
+// The numbers inside a sign are read against the origin of the map it is
+// summoned into, so a sign left in this player's own frame does not land near
+// the host: it lands wherever those numbers fall in the host's map. On 12.09
+// that was off the map in Majula, and the guest was summoned, fell and died on
+// arrival within seconds -- twice in a row. So a sign that cannot be aimed is
+// not placed at all: it waits for the other player's position and for that
+// map's origin, which the other player sends as soon as it knows it.
+//
+// Only for a guest whose sign a host is meant to summon. A host, a solo game
+// and sign_under_feet=false place as before.
+// Host: measure the origin of the map I am standing in by putting one sign down.
+//
+// A map's origin can only be measured by someone standing in it: it is my own
+// position minus what the game wrote into my own sign, over 32 (session_hooks.cpp).
+// The guest needs it to aim its sign at me, so in a map where I have never
+// placed one -- Majula above all -- the join would now wait for an origin that
+// nobody can supply. One sign of my own in my own world measures it, and it goes
+// to the guest from there. Nothing summons it: the automatic summon only takes
+// the sign the other player announced.
+static void ProbeOwnMapOrigin() {
+    auto& Lobby = DS2Coop::Session::SessionManager::GetInstance();
+    if (!Lobby.IsActive() || !Lobby.IsHost()) return;
+    const uint32_t Here = DS2Coop::Hooks::GetLocalAreaId();
+    if (!Here) return;
+    uint32_t Area = 0;
+    float X = 0, Y = 0, Z = 0;
+    if (DS2Coop::Hooks::GetLocalMapOrigin(&Area, &X, &Y, &Z)) return;   // measured already
+
+    // Game thread only (the sign-manager tick).
+    static uint32_t  s_forMap = 0;
+    static int       s_tries = 0;
+    static ULONGLONG s_nextTry = 0;
+    if (s_forMap != Here) {
+        s_forMap = Here;
+        s_tries = 0;
+        s_nextTry = 0;
+    }
+    const ULONGLONG Now = GetTickCount64();
+    if (s_tries >= 3 || Now < s_nextTry) return;
+    ++s_tries;
+    s_nextTry = Now + 30000;
+    g_placeSignPending.store(true);
+    LOG_INFO("[SIGN] map %u has no origin yet -- placing one sign of my own to measure it (try %d of 3)",
+             Here, s_tries);
+}
+
+static bool CanAimSignAtPartner(uint32_t* PartnerArea) {
+    *PartnerArea = 0;
+    auto& Lobby = DS2Coop::Session::SessionManager::GetInstance();
+    if (!Lobby.IsActive() || Lobby.IsHost()) return true;
+    if (!DS2Coop::Hooks::GetSignUnderFeet()) return true;
+    const uint64_t LocalId = DS2Coop::Network::PeerManager::GetInstance().GetLocalPlayerId();
+    for (const auto& Player : Lobby.GetPlayers()) {
+        if (Player.playerId == LocalId) continue;
+        *PartnerArea = Player.onlineAreaId;
+        return Player.onlineAreaId != 0 && DS2Coop::Hooks::IsMapOriginKnown(Player.onlineAreaId);
+    }
+    return false;   // nobody else in the lobby yet
+}
+
 // Ask for the sign list far more often than the game does.
 //
 // Left alone the client polls about once a minute, which is why a sign placed
@@ -2221,6 +2283,11 @@ void __fastcall SignTickDetour(void* Manager, uint32_t Delta) {
         }
     }
 
+    // Only whoever stands in a map knows the origin its sign coordinates are
+    // measured against, and the other player needs it to aim a sign here.
+    DS2Coop::Hooks::ShareLocalMapOrigin();
+    ProbeOwnMapOrigin();
+
     if (Manager && g_lastSignPoll != ULLONG_MAX) {
         const ULONGLONG Now = GetTickCount64();
         const bool Asked = g_signPollWanted.exchange(false);
@@ -2235,7 +2302,20 @@ void __fastcall SignTickDetour(void* Manager, uint32_t Delta) {
     // event -- the sign waits: put down there, it was summoned and declined at
     // once (12.09 23:52:29, sitting at the Majula bonfire), and the server took
     // the reject badly. It goes down the moment that is over.
-    if (Manager && g_placeSignPending.load() && DS2Coop::Sync::IsSummonBusy()) {
+    uint32_t PartnerArea = 0;
+    if (Manager && g_placeSignPending.load() && !CanAimSignAtPartner(&PartnerArea)) {
+        static ULONGLONG s_aimToldAt = 0;
+        const ULONGLONG Now = GetTickCount64();
+        if (Now - s_aimToldAt > 20000) {
+            s_aimToldAt = Now;
+            if (!PartnerArea) {
+                LOG_INFO("[PLACE] the other player's position has not arrived yet -- the sign waits");
+            } else {
+                LOG_WARNING("[PLACE] map %u has no origin here, so a sign cannot be aimed into it -- the "
+                            "sign waits (an unaimed sign drops the summoned player off the map)", PartnerArea);
+            }
+        }
+    } else if (Manager && g_placeSignPending.load() && DS2Coop::Sync::IsSummonBusy()) {
         static ULONGLONG s_busyToldAt = 0;
         const ULONGLONG Now = GetTickCount64();
         if (Now - s_busyToldAt > 20000) {

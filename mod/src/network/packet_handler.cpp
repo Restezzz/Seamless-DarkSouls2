@@ -3,6 +3,7 @@
 // Routes packets to the appropriate subsystem (session, sync, etc.)
 
 #include "../../include/network.h"
+#include "../../include/hooks.h"
 #include "../../include/session.h"
 #include "../../include/sync.h"
 #include "../../include/utils.h"
@@ -64,6 +65,20 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
             if (packet->size >= sizeof(BossStatePacket)) {
                 const auto* State = reinterpret_cast<const BossStatePacket*>(packet);
                 DS2Coop::Sync::NotePartnerBoss(State->active, State->phase);
+            }
+            break;
+
+        case PacketType::MapOriginInfo:
+            if (packet->size >= sizeof(MapOriginPacket)) {
+                const auto* Origin = reinterpret_cast<const MapOriginPacket*>(packet);
+                DS2Coop::Hooks::NoteRemoteMapOrigin(Origin->area, Origin->x, Origin->y, Origin->z);
+            }
+            break;
+
+        case PacketType::BossDoorCrossed:
+            if (packet->size >= sizeof(BossDoorPacket)) {
+                const auto* Door = reinterpret_cast<const BossDoorPacket*>(packet);
+                DS2Coop::Sync::NoteHostCrossedBossFog(Door->flag);
             }
             break;
 
