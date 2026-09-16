@@ -85,6 +85,11 @@ constexpr uint32_t kBattleStart    = 0x180AF0;    // (boss manager, area index, 
 constexpr uint32_t kNetEnemyReset  = 0x517080;    // (NetEnemyManager): the game's own reset of the enemy sync table
 constexpr uint32_t kNetEnemyVtable = 0x10FB580;   // NetEnemyManager, *(netRoot)+0x28
 constexpr uint32_t kPhantomParam   = 0x16F540;    // (phantom type) -> that type's param row ([GMImp+0x18] lookup)
+constexpr uint32_t kAcceptEvent    = 0x2BD0D0;    // NetSummonAcceptMultiplayCtrl slot E0 (ctrl, reason): a host event for one guest
+
+constexpr int kAcceptBossKilled = 1;              // accept controller reason: a boss died in the host's world
+constexpr int kBranchDutyDone   = 1;              // phantom branch reason: the boss is dead, duty fulfilled
+constexpr uint32_t kResultDoneByte = 0xCE;        // EventResult: set by both branches once they have run
 
 // The camera (docs §3.23). Offsets, not RVAs: all of them hang off GMImp.
 constexpr uint32_t kCameraManager  = 0x20;        // [GMImp+0x20]  CameraManager
@@ -118,6 +123,7 @@ using ParamRowFn = void*(__fastcall*)(uint32_t);
 using CamCmdFn   = void(__fastcall*)(void*, void*);
 using BattleStartFn = uint64_t(__fastcall*)(void*, int32_t, int32_t);
 using NetEnemyResetFn = void(__fastcall*)(void*);
+using AcceptEventFn = void(__fastcall*)(void*, int);
 
 // Set by MH_CreateHook before the hook goes live, so a detour never sees null.
 void* g_phantomBranchOriginal = nullptr;
@@ -129,6 +135,7 @@ void* g_joinLeaveOriginal     = nullptr;
 void* g_resultSeqOriginal     = nullptr;
 bool  g_cameraMoved           = false;   // the camera was pointed away from this player
 void* g_battleStartOriginal   = nullptr;
+void* g_acceptEventOriginal   = nullptr;
 
 std::atomic<bool>      g_enabled{ true };
 std::atomic<bool>      g_partnerAlive{ true };     // from the partner's PlayerDeath / PlayerRespawn
@@ -419,6 +426,16 @@ void SendBossState(int32_t Active, int32_t Phase, int32_t AreaIndex, int32_t Par
     Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
 }
 
+// What both branches do last, after sending the phantom on its way: the result
+// job that called them counts as run.
+void MarkBranchDone(void* Result) {
+    __try {
+        *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(Result) + kResultDoneByte) = 1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LOG_WARNING("[DEATH] could not mark the result as done");
+    }
+}
+
 // --- detours -----------------------------------------------------------------
 void __fastcall PhantomBranchDetour(void* Result, int Reason) {
     const int     Join    = ReadJoinState();
@@ -431,13 +448,27 @@ void __fastcall PhantomBranchDetour(void* Result, int Reason) {
     const bool InBoss   = (BossActive > 0 && BossPhase == 1) || HostBoss;
     const bool Partner  = g_partnerAlive.load();
 
+    // The boss is dead and this guest is on its feet: reason 1 is the game's "duty
+    // fulfilled, back to your world" (16.09: the Dragonrider died at 18:59:45, the
+    // guest's result ran at 18:59:52 and this branch sent it home at 19:00:04, so
+    // it had to join again). In seamless co-op the partner stays. The rest of that
+    // result -- the message, and the reward jobs built from the row's dwords at
+    // +8/+0xC -- runs as before; only the trip home is left out.
+    const bool Stay     = g_enabled.load() && Guest && Reason == kBranchDutyDone && IsAlive(Hp);
     // Held: the fight goes on while someone is still standing in it.
-    const bool HoldBack = g_enabled.load() && Guest && InBoss && (OwnDeath ? Partner : IsAlive(Hp));
-    const bool Back     = g_enabled.load() && Guest && !HoldBack;
+    const bool HoldBack = !Stay && g_enabled.load() && Guest && InBoss && (OwnDeath ? Partner : IsAlive(Hp));
+    const bool Back     = !Stay && g_enabled.load() && Guest && !HoldBack;
     LOG_INFO("[DEATH] phantom branch: reason %d, my HP %d, join state %d, boss here %d (phase %d), host's fight %s, partner %s -> %s",
              Reason, Hp, Join, BossActive, BossPhase, HostBoss ? "on" : "off", Partner ? "alive" : "dead",
-             HoldBack ? "HELD until the fight is decided" : Back ? "home, then straight back" : "the game's way");
+             Stay ? "STAYS: the boss is dead, the partner's world goes on"
+                  : HoldBack ? "HELD until the fight is decided" : Back ? "home, then straight back" : "the game's way");
 
+    if (Stay) {
+        MarkBranchDone(Result);
+        Toast("Boss defeated -- you stay in the host's world", "Босс повержен — остаёшься в мире хоста",
+              UI::NotifyKind::Player);
+        return;
+    }
     if (HoldBack) {
         g_hold = Hold{ true, Result, Reason, OwnDeath, GetTickCount64() };
         if (OwnDeath) {
@@ -628,6 +659,32 @@ uint64_t __fastcall RequestWarpDetour(void* Gm, const int32_t* Request, uint64_t
 void __fastcall MpWarpNoticeDetour(void* Mp, int Kind) {
     LOG_INFO("[DEATH] my warp: every guest gets reason 4 (warp kind %d)", Kind);
     reinterpret_cast<NoticeFn>(g_mpNoticeOriginal)(Mp, Kind);
+}
+
+// An event in the host's world, handed to each guest's accept controller
+// (NetSummonAcceptMultiplayCtrl, slot E0) with a reason: 0 from exe+0x2C7B00,
+// 1 a boss died, 2 and 3 door crossings, 4 the host's warp, 5 a death record.
+//
+// Reason 1 is how the game lets phantoms go after a boss. exe+0x181490, cleaning
+// up after the kill -- right after the boss reward, exe+0x181850 -- calls
+// exe+0x2C7D40, which gives reason 1 to every controller; unless the battle is
+// one of the two the game keeps phantoms for (ids at exe+0x157C1E0: 1021021 and
+// 1021031), the controller writes code 0xB and state 0x11 and the guest is let
+// go. 16.09: the Dragonrider died at 18:59:45, the host sent
+// RequestNotifyLeaveGuestPlayer at 19:00:02, the guest went home at 19:00:04.
+//
+// In seamless co-op the partner stays, so a host in a lobby does not pass reason
+// 1 on: the controller is left exactly as those two battles leave it, where the
+// same case changes nothing. The guest's own "duty fulfilled" is kept from
+// sending it home in PhantomBranchDetour. Other reasons go through untouched;
+// all of them are logged, they are rare.
+void __fastcall AcceptEventDetour(void* Ctrl, int Reason) {
+    auto& Lobby = Session::SessionManager::GetInstance();
+    const bool Keep = Reason == kAcceptBossKilled && g_enabled.load() && Lobby.IsActive() && Lobby.IsHost();
+    LOG_INFO("[DEATH] a guest's accept controller gets reason %d%s", Reason,
+             Keep ? " (a boss died here) -- not passed on, the guest stays in my world" : "");
+    if (Keep) return;
+    reinterpret_cast<AcceptEventFn>(g_acceptEventOriginal)(Ctrl, Reason);
 }
 
 // The game throwing a guest out of the host's world by itself, as opposed to a
@@ -1450,6 +1507,7 @@ bool InstallDeathSync(bool Enabled) {
         HookAt(kJoinLeave, reinterpret_cast<void*>(&JoinLeaveDetour), &g_joinLeaveOriginal, "join controller leave");
         HookAt(kResultSequence, reinterpret_cast<void*>(&ResultSeqDetour), &g_resultSeqOriginal, "death result sequence");
         HookAt(kBattleStart, reinterpret_cast<void*>(&BattleStartDetour), &g_battleStartOriginal, "boss battle start");
+        HookAt(kAcceptEvent, reinterpret_cast<void*>(&AcceptEventDetour), &g_acceptEventOriginal, "guest accept controller event");
     }
     LOG_INFO("[DEATH] death handling %s", Enabled ? "ON: back in the partner's world after a death, boss fights wait for both"
                                                   : "off (death_respawn=false): the game's own way, probes only");
