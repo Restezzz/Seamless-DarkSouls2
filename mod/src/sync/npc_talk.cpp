@@ -88,6 +88,7 @@ constexpr ptrdiff_t kActionInPrompt = 0x8C;       // the prompt's action type at
 constexpr uint32_t  kPhantomRow       = 0x16F6D0; // (chr) -> phantom param row id
 constexpr ptrdiff_t kTypeInChr        = 0xB0;     // chr+0xB0 -> PlayerType
 constexpr ptrdiff_t kPhantomIdInType  = 0x3C;     // PlayerType+0x3C ChrNetworkPhantomId
+constexpr ptrdiff_t kGeneratorInChr   = 0x110;    // chr+0x110: generator record, -1 for a player
 
 using PromptAllowedFn = uint64_t(__fastcall*)(void*, const uint8_t*);
 using PhantomRowFn    = uint32_t(__fastcall*)(void*);
@@ -167,14 +168,29 @@ uint32_t __fastcall PhantomRowDetour(void* Chr) {
     const uintptr_t Local = LocalPlayer();
     if (!Local || Here == Local) return Stock;
 
-    // A player's character carries the same vtable as this player's own; an NPC
-    // does not. That tells the partner apart without calling into the game's
-    // runtime type machinery from a per-frame detour.
+    // A player's character carries the same vtable as this player's own -- and so
+    // does every human-shaped NPC: the character factory builds those as
+    // PlayerCtrl too (exe+0x37EBE0, called at exe+0x35628E). On 16.09 that is how a
+    // Majula NPC was taken for the partner: "partner team 17" turned up in both
+    // players' logs, flipping at every world reset as the NPC was destroyed and
+    // made again -- and the death camera was pointed at whatever this returned.
+    // What tells the two apart is [chr+0x110]: a character made by a generator
+    // keeps its generator record there, a player keeps -1 (exe+0x13CF00 tests for
+    // exactly that). Still no call into the game from a per-frame detour.
     uintptr_t MyVtbl = 0, ItsVtbl = 0;
-    const bool IsPlayer = ReadPtr(Local, &MyVtbl) && ReadPtr(Here, &ItsVtbl) && MyVtbl == ItsVtbl;
+    int32_t   Generator = 0;
+    const bool SameClass = ReadPtr(Local, &MyVtbl) && ReadPtr(Here, &ItsVtbl) && MyVtbl == ItsVtbl;
+    const bool IsPlayer  = SameClass && ReadI32(Here + kGeneratorInChr, &Generator) && Generator == -1;
     if (IsPlayer) {
         g_partnerChr.store(Here);
         g_partnerChrAt.store(GetTickCount64());
+    }
+    static std::atomic<uint32_t> s_classLines{ 0 };
+    if (SameClass && s_classLines.fetch_add(1) < 12) {
+        int32_t Mine = 0;
+        ReadI32(Local + kGeneratorInChr, &Mine);
+        LOG_INFO("[NPC] %p is built like a player; chr+0x110 = %d (this player's own: %d) -> %s",
+                 Chr, Generator, Mine, IsPlayer ? "the partner" : "a human-shaped NPC");
     }
 
     const bool Solid = g_solidEnabled.load() && Session::SessionManager::GetInstance().IsActive();

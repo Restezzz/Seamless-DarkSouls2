@@ -70,6 +70,37 @@ bool HavePartner() {
     return Session::SessionManager::GetInstance().GetPlayers().size() > 1;
 }
 
+// A guest in someone else's world right now: the join controller
+// ([[netRoot+0x18]+0x40], NetSummonJoinMultiplayCtrl) is in state 7.
+bool InHostWorld() {
+    __try {
+        const uintptr_t Base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+        const uintptr_t Root = *reinterpret_cast<const uintptr_t*>(Base + 0x1616CF8);
+        if (!Root) return false;
+        const uintptr_t Mp = *reinterpret_cast<const uintptr_t*>(Root + 0x18);
+        if (!Mp) return false;
+        const uintptr_t Ctrl = *reinterpret_cast<const uintptr_t*>(Mp + 0x40);
+        if (!Ctrl) return false;
+        if (*reinterpret_cast<const uintptr_t*>(Ctrl) != Base + 0x10D7BD8) return false;
+        return *reinterpret_cast<const int32_t*>(Ctrl + 0xF8) == 7;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// Whether a rest here and a rest there are rests in the same world.
+//
+// The world reset removes every generator's character and then re-arms them,
+// NPCs included, and on 16.09 the host kept losing its NPCs to replays of a
+// guest's rest taken while the guest was back in its OWN world (18:54:57,
+// 19:04:45, 19:16:19, 19:28:34): the lobby had two players, so the rest was
+// passed on, and the host's world was reset for a rest that happened somewhere
+// else. A rest only means something to the other player when both stand in the
+// same world -- which, for a guest, is the host's.
+bool InSharedWorld() {
+    return Session::SessionManager::GetInstance().IsHost() || InHostWorld();
+}
+
 void BroadcastReset() {
     Network::PacketHeader Header{};
     Header.magic = 0x44533243;
@@ -82,6 +113,11 @@ void BroadcastReset() {
 void __fastcall RestResetDetour(void* A, void* B, void* C, void* D) {
     g_restReset(A, B, C, D);
     if (!g_enabled.load() || !HavePartner()) return;
+    if (!InSharedWorld()) {
+        LOG_INFO("[WORLD] rested in my own world while a guest of the lobby -- that is not the host's world, "
+                 "so nobody else is reset");
+        return;
+    }
     LOG_INFO("[WORLD] rested here -- the world was reset; telling the other players");
     BroadcastReset();
     UI::Overlay::GetInstance().ShowNotification(
@@ -114,7 +150,10 @@ void __fastcall GenUpdateDetour(void* Manager, float* Dt) {
             std::lock_guard<std::mutex> Lock(g_fromMutex);
             From = g_pendingFrom;
         }
-        if (ReplayResetSafely()) {
+        if (!InSharedWorld()) {
+            LOG_INFO("[WORLD] %s rested, but I am not in their world right now -- nothing here to reset",
+                     From.c_str());
+        } else if (ReplayResetSafely()) {
             LOG_INFO("[WORLD] %s rested -- the world was reset here too", From.c_str());
             UI::Overlay::GetInstance().ShowNotification(
                 UI::Format(UI::Tr("%s rested at a bonfire \xE2\x80\x94 enemies are back",
