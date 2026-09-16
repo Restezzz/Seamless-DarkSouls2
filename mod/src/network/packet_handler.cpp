@@ -75,6 +75,13 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
             }
             break;
 
+        case PacketType::HostTravelled:
+            if (packet->size >= sizeof(HostTravelledPacket)) {
+                const auto* Travel = reinterpret_cast<const HostTravelledPacket*>(packet);
+                DS2Coop::Sync::NoteHostTravelled(Travel->map, Travel->bonfire);
+            }
+            break;
+
         case PacketType::FlagBulk:
             if (packet->size >= sizeof(FlagBulkPacket)) {
                 const auto* Bulk = reinterpret_cast<const FlagBulkPacket*>(packet);

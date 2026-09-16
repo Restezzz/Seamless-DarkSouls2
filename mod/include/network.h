@@ -66,6 +66,11 @@ enum class PacketType : uint8_t {
     // wall until a fight was already running -- on 12.09 the guest stood at the
     // fog for five minutes (free_travel.cpp).
     BossDoorCrossed = 0x39,
+    // "I, the host, just travelled by bonfire." Vanilla answers a host's warp by
+    // dropping every guest -- five minutes later, after the guest has spent them
+    // in a copy of a world the host already left (16.09: host warp 18:38:52,
+    // guest thrown out 18:41:01). The guest follows at once instead.
+    HostTravelled = 0x3C,
 
     // Custom data
     ChatMessage = 0x40,
@@ -166,6 +171,12 @@ struct FlagBulkPacket {
     uint32_t     group;
     uint32_t     bytes;      // how many of the array below are filled
     uint8_t      bits[640];
+};
+
+struct HostTravelledPacket {
+    PacketHeader header;
+    int32_t      map;       // the warp request's raw map id (0x0A1F0000 = map 10310000)
+    int32_t      bonfire;   // the bonfire travelled to
 };
 #pragma pack(pop)
 

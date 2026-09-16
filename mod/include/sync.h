@@ -85,6 +85,9 @@ void SetBossFogWait(bool on);
 // and sixteen entries at most; this fills the rest. The byte it writes is never
 // saved, so the guest's own progress is untouched.
 void NotePartnerBonfires(const void* entries, uint32_t count);
+// The host travelled by bonfire (packet HostTravelled). A guest in its world
+// leaves at once and joins again where the host went, once it has arrived.
+void NoteHostTravelled(int32_t map, int32_t bonfire);
 
 // Progress already made, handed over once when a session starts (packet
 // FlagBulk). The flag diff only reports what changes while both are connected,

@@ -127,6 +127,9 @@ bool  g_cameraMoved           = false;   // the camera was pointed away from thi
 std::atomic<bool>      g_enabled{ true };
 std::atomic<bool>      g_partnerAlive{ true };     // from the partner's PlayerDeath / PlayerRespawn
 std::atomic<ULONGLONG> g_partnerBackAt{ 0 };       // when the partner last got up again
+std::atomic<bool>      g_hostTravelPending{ false }; // the host travelled by bonfire (HostTravelled)
+std::atomic<int32_t>   g_hostTravelMap{ 0 };
+std::atomic<int32_t>   g_hostTravelBonfire{ 0 };
 std::atomic<bool>      g_cancelRejoin{ false };    // the player left on purpose
 std::atomic<int32_t>   g_partnerBossActive{ 0 };   // the host's boss fight, as it reported it
 std::atomic<int32_t>   g_partnerBossPhase{ 0 };
@@ -286,6 +289,18 @@ uint32_t PartnerArea() {
     return 0;
 }
 
+// Where the partner last said it was standing, and in which map.
+bool ReadPartnerSpot(Spot* Out) {
+    auto& Players = Session::SessionManager::GetInstance();
+    const uint64_t LocalId = Network::PeerManager::GetInstance().GetLocalPlayerId();
+    for (const auto& P : Players.GetPlayers()) {
+        if (P.playerId == LocalId || !P.onlineAreaId) continue;
+        *Out = Spot{ P.onlineAreaId, P.x, P.y, P.z, true };
+        return true;
+    }
+    return false;
+}
+
 bool ReadLocalSpot(Spot* Out) {
     float X = 0, Y = 0, Z = 0, Rot = 0;
     if (!GetLocalPlayerPosition(X, Y, Z, Rot)) return false;
@@ -318,6 +333,9 @@ struct Rejoin {
     ULONGLONG Since;
     ULONGLONG AliveSince;
     bool      WaitLogged;
+    bool      WaitHostArrival;    // following a host that travelled: wait until it is somewhere new
+    Spot      From;               // where the host was when it travelled
+    ULONGLONG HostSettledSince;
 };
 Rejoin g_rejoin{};
 
@@ -422,6 +440,68 @@ void __fastcall LastBonfireDetour(void* Events, const int32_t* Record) {
              Fields[2], Fields[0], Here.Area, Here.X, Here.Y, Here.Z);
 }
 
+// The arrival warp of a join, and where it would put this guest.
+//
+// The request carries the landing position at +0x18/+0x1C/+0x20, in the same
+// world coordinates the host reports for itself -- 16.09 measured it on every
+// join: each good arrival sat within half a metre of the host, and both bad ones
+// were 10.55 m off in X, which is exactly the gap between the origin the host's
+// probe sign had learned for map 10300000 and the real one. In Z the gap was
+// 135 m: the guest came in under the map, fell to its death (death type 90) and
+// was thrown out once it got up again. So a landing far from the host is a sign
+// aimed with a wrong origin, and the host's own position is the right answer --
+// whatever any map origin says.
+constexpr uint32_t kJoinArrivalCaller = 0x2C2E48;
+constexpr float    kArrivalFarSq      = 20.0f * 20.0f;
+
+void CorrectArrival(const int32_t* Request, int32_t RawMap) {
+    Spot Host{};
+    if (!ReadPartnerSpot(&Host)) {
+        LOG_INFO("[DEATH] arrival: the host's position is not known here -- landing as the game has it");
+        return;
+    }
+    const uint32_t Area = RawMapToArea(RawMap);
+    __try {
+        float* Pos = reinterpret_cast<float*>(const_cast<int32_t*>(Request) + 6);
+        const float Dx = Pos[0] - Host.X, Dy = Pos[1] - Host.Y, Dz = Pos[2] - Host.Z;
+        if (Area != Host.Area) {
+            LOG_INFO("[DEATH] arrival at (%.2f, %.2f, %.2f) in map %u while the host reports map %u -- "
+                     "not the same map, left alone", Pos[0], Pos[1], Pos[2], Area, Host.Area);
+            return;
+        }
+        if (Dx * Dx + Dy * Dy + Dz * Dz <= kArrivalFarSq) {
+            LOG_INFO("[DEATH] arrival at (%.2f, %.2f, %.2f), off the host by (%.2f, %.2f, %.2f) -- as aimed",
+                     Pos[0], Pos[1], Pos[2], Dx, Dy, Dz);
+            return;
+        }
+        LOG_WARNING("[DEATH] arrival at (%.2f, %.2f, %.2f) is off the host at (%.2f, %.2f, %.2f) by "
+                    "(%.2f, %.2f, %.2f) -- the sign was aimed with a wrong map origin; landing at the host",
+                    Pos[0], Pos[1], Pos[2], Host.X, Host.Y, Host.Z, Dx, Dy, Dz);
+        Pos[0] = Host.X;
+        Pos[1] = Host.Y;
+        Pos[2] = Host.Z;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LOG_WARNING("[DEATH] arrival: the warp request could not be read -- left alone");
+    }
+}
+
+// The host has just travelled by bonfire: tell the guest to follow.
+void TellGuestHostTravelled(int32_t RawMap, int32_t Bonfire) {
+    auto& Lobby = Session::SessionManager::GetInstance();
+    if (!Lobby.IsActive() || !Lobby.IsHost()) return;
+    if (Network::PeerManager::GetInstance().GetPeers().empty()) return;
+    Network::HostTravelledPacket Packet{};
+    Packet.header.magic = 0x44533243;
+    Packet.header.type = Network::PacketType::HostTravelled;
+    Packet.header.size = sizeof(Packet);
+    Packet.header.timestamp = GetTickCount64();
+    Packet.map = RawMap;
+    Packet.bonfire = Bonfire;
+    Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
+    LOG_INFO("[DEATH] I travelled to bonfire %d (map %u) -- telling the guest to follow", Bonfire,
+             RawMapToArea(RawMap));
+}
+
 uint64_t __fastcall RequestWarpDetour(void* Gm, const int32_t* Request, uint64_t MpWarp) {
     int32_t F[8] = {};
     const bool Readable = ReadWords(Request, F, 8);
@@ -449,7 +529,16 @@ uint64_t __fastcall RequestWarpDetour(void* Gm, const int32_t* Request, uint64_t
         return 0;
     }
 
+    if (Readable && F[0] == 0 && F[1] == 4 && (MpWarp & 0xFF) &&
+        Caller - ExeBase() == kJoinArrivalCaller) {
+        CorrectArrival(Request, F[2]);
+    }
+
     const uint64_t Result = reinterpret_cast<WarpFn>(g_requestWarpOriginal)(Gm, Request, MpWarp);
+
+    if (Readable && (Result & 0xFF) && F[0] == 3 && F[1] == 2) {
+        TellGuestHostTravelled(F[2], F[6]);
+    }
     if (!Readable) {
         LOG_INFO("[DEATH] warp requested (request unreadable), multiplayer %u -> %s (from exe+0x%llX)",
                  static_cast<unsigned>(MpWarp & 0xFF), (Result & 0xFF) ? "taken" : "refused",
@@ -1069,6 +1158,38 @@ void TickHold(int Join, int32_t Hp) {
     if (Current && Join == kJoinInWorld) CallPhantomBranch(Held.Result, Held.Reason);
 }
 
+// The host travelled by bonfire (packet HostTravelled). The game's own answer is
+// to throw the guest out -- up to five minutes later: on 16.09 the host travelled
+// at 18:38:52, its game sent RequestNotifyLeaveGuestPlayer at 18:40:58, and the
+// guest was thrown out at 18:41:01 after two minutes alone in a copy of a world
+// the host had left. So the guest follows at once: it leaves that copy and joins
+// again where the host went, once the host has actually arrived there.
+void TickHostTravel(int Join) {
+    if (!g_hostTravelPending.exchange(false)) return;
+    const int32_t Bonfire = g_hostTravelBonfire.load();
+    if (!g_enabled.load()) return;
+    if (Join != kJoinInWorld) {
+        LOG_INFO("[DEATH] the host travelled to bonfire %d, and I am not in its world right now -- nothing to follow",
+                 Bonfire);
+        return;
+    }
+    if (g_hold.Active) {
+        LOG_INFO("[DEATH] the host travelled to bonfire %d while I am held in its boss fight -- the hold decides",
+                 Bonfire);
+        return;
+    }
+    Spot From{};
+    ReadPartnerSpot(&From);   // still the host's position from before its load
+    LOG_INFO("[DEATH] the host travelled to bonfire %d -- following: leaving this copy of its world", Bonfire);
+    Toast("The host travelled -- following...", "Хост переместился — иду за ним…", UI::NotifyKind::Player);
+    RequestLeaveWorld();
+    g_cancelRejoin.store(false);   // this leave starts a follow; it is not a goodbye
+    ArmRejoin(false, true);
+    g_rejoin.WaitHostArrival = true;
+    g_rejoin.From = From;
+    g_rejoin.HostSettledSince = 0;
+}
+
 void TickRejoin(int Join, int32_t Hp) {
     // Leaving the lobby after the game kept throwing us out -- done here, once
     // the game has finished sending us home, never from inside its own leave.
@@ -1099,6 +1220,27 @@ void TickRejoin(int Join, int32_t Hp) {
         return;
     }
     if (Now - g_rejoin.AliveSince < kRejoinSettleMs) return;
+    // Following a host that travelled: not before it is somewhere new and has
+    // been there a moment, or the sign would be aimed at where it left from.
+    if (g_rejoin.WaitHostArrival) {
+        Spot Host{};
+        const bool Known = ReadPartnerSpot(&Host);
+        const float Dx = Host.X - g_rejoin.From.X, Dy = Host.Y - g_rejoin.From.Y, Dz = Host.Z - g_rejoin.From.Z;
+        const bool Moved = Known && (!g_rejoin.From.Valid || Host.Area != g_rejoin.From.Area ||
+                                     Dx * Dx + Dy * Dy + Dz * Dz > 25.0f);
+        if (!Moved) {
+            g_rejoin.HostSettledSince = 0;
+            return;
+        }
+        if (!g_rejoin.HostSettledSince) {
+            g_rejoin.HostSettledSince = Now;
+            return;
+        }
+        if (Now - g_rejoin.HostSettledSince < kPartnerSettleMs) return;
+        g_rejoin.WaitHostArrival = false;
+        LOG_INFO("[DEATH] the host is where it travelled (map %u, %.2f, %.2f, %.2f) -- joining it there",
+                 Host.Area, Host.X, Host.Y, Host.Z);
+    }
     // The partner has to be up, and up long enough for its position to be the
     // new one: on 12.09 the sign was aimed at the host still lying at the boss,
     // a second before the host's respawn arrived.
@@ -1158,12 +1300,20 @@ void DeathSyncGameTick() {
     TickTravelList(Join);
     TickBonfireSync(Join);
     TickHold(Join, Hp);
+    TickHostTravel(Join);
     TickRejoin(Join, Hp);
 }
 
 void NotePartnerLife(bool Alive) {
     const bool Was = g_partnerAlive.exchange(Alive);
     if (Alive && !Was) g_partnerBackAt.store(GetTickCount64());
+}
+
+void NoteHostTravelled(int32_t RawMap, int32_t Bonfire) {
+    g_hostTravelMap.store(RawMap);
+    g_hostTravelBonfire.store(Bonfire);
+    g_hostTravelPending.store(true);
+    LOG_INFO("[DEATH] the host says it travelled to bonfire %d (map %u)", Bonfire, RawMapToArea(RawMap));
 }
 
 void NotePartnerBonfires(const void* entries, uint32_t count) {
