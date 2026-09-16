@@ -95,6 +95,24 @@ constexpr uint32_t kUnregister      = 0x1E6410;   // (object reference*) -> drop
 constexpr uint32_t kItemDropSet     = 0x1D33E0;   // (component, enable): register or remove the drop
 constexpr uint32_t kShouldExist     = 0x1D32E0;   // (component) -> the model says the item is there
 
+// Treasure chests (docs §3.36). The lid is the object's StateAct state; what was
+// taken is the drop handle at component +0x68 (lot +0x70, rolled +0x74, lying
+// +0x76, taken +0x7A).
+constexpr uint32_t kChestComp       = 0x1E5C80;   // object -> the treasure box component, or 0
+constexpr uint32_t kChestState      = 0x3F2D30;   // (component) -> the lid's state
+constexpr uint32_t kChestKind2      = 0x3F2A10;   // (component) -> a kind-2 box (its lot swapped for 0x2FAF468)
+constexpr uint32_t kChestRegister   = 0x1CFF10;   // (component, enable): register or remove the chest's drop
+constexpr uint32_t kChestInit       = 0x1CF930;   // (component, flag): roll the chest's lot, make its drop
+constexpr uint32_t kObjStateSet     = 0x3C1EA0;   // (object, state, 0): set the object's StateAct state
+constexpr uint32_t kObjLotIndex     = 0x3BA640;   // (object) -> lot index for the current cycle
+constexpr uint32_t kObjRow          = 0x3BA6A0;   // (object) -> its param row
+constexpr uint32_t kSvrEventVtable  = 0x10E9FB8;  // the server-event chest: it reports takes by itself
+constexpr uint32_t kChestHandleOff  = 0x68;
+constexpr uint32_t kChestLotOff     = 0x70;
+constexpr uint32_t kChestTakenOff   = 0x7A;
+constexpr uint32_t kKind2Lot        = 0x2FAF468;
+constexpr uint32_t kPackedTaken     = 1u << 24;
+
 // --- layout --------------------------------------------------------------------
 constexpr uint32_t kHandleOff     = 0x40;   // drop handle inside the component
 constexpr uint32_t kRolledMaskOff = 0x4C;   // handle +0xC: lot slots ever rolled
@@ -141,12 +159,16 @@ std::atomic<uint32_t>  g_lotsBuilt{ 0 };
 std::atomic<ULONGLONG> g_lastAreaToast{ 0 };
 
 // An item picked up in multiplayer, until that area loads in the owner's world.
+// A chest line also carries the lid's state and the NG cycle it was taken in.
 struct Pending {
     std::string Owner;
     uint32_t Area = 0;
     uint32_t Object = 0;
     uint32_t Lot = 0;
     uint32_t Packed = 0;
+    bool     Chest = false;
+    uint32_t State = 0;
+    uint32_t Cycle = 0;
 };
 
 // The same, flat, for the code that runs under SEH.
@@ -156,6 +178,9 @@ struct PendingPod {
     uint32_t Lot;
     uint32_t Packed;
     uint32_t Applied;
+    uint32_t Chest;
+    uint32_t State;
+    uint32_t Cycle;
 };
 
 struct AreaStats {
@@ -167,6 +192,9 @@ struct AreaStats {
     uint32_t Applied;
     uint32_t Shown;
     uint32_t Hidden;
+    uint32_t Chests;         // chests in the area
+    uint32_t ChestsTaken;    // chests emptied from this player's own records / remembered lines
+    uint32_t ChestLidsSet;   // lids put open at home
 };
 
 struct PickupProbe {
@@ -180,6 +208,11 @@ struct PickupProbe {
     uint32_t  PackedAfter;
     uint8_t   Found;
     uint8_t   StillLive;
+    uint8_t   Chest;       // the drop was a treasure chest's
+    uint8_t   State;       // ... its lid state
+    uint8_t   Kind2;
+    uint8_t   SvrEvent;
+    uint32_t  Cycle;
 };
 
 std::mutex           g_pendingMutex;
@@ -264,6 +297,146 @@ void ApplyItemState(uintptr_t StateMgr, uintptr_t Obj, uintptr_t Comp,
     S->Applied++;
 }
 
+// --- treasure chests (docs §3.36) --------------------------------------------------
+// A chest's lid and its "taken" were never written anywhere when a guest emptied it
+// in the host's world (the multiplayer paths skip every store), so at home the
+// record still said "closed, no lot" and opening it rolled the item again -- and the
+// other way round, a chest emptied at home could be looted again in the host's world.
+
+using ObjU32Fn      = uint32_t(__fastcall*)(uintptr_t obj);
+using ObjStateSetFn = void(__fastcall*)(uintptr_t obj, uint8_t state, int32_t flag);
+using ChestRegFn    = void(__fastcall*)(uintptr_t comp, char enable);
+
+bool ChestDropIsLive(uintptr_t Box) {
+    const uintptr_t Mgr = Game<DropMgrGetFn>(kDropMgrGet)();
+    return Mgr && Game<DropMgrHasFn>(kDropMgrHas)(Mgr, reinterpret_cast<uint64_t*>(Box + kChestHandleOff));
+}
+
+// The NG cycle this save is in ([[[GMImp+0xA8]+0xC0]+0x68]); 0 if unreadable.
+uint32_t CurrentCycle() {
+    const uintptr_t Gm = GameManager();
+    if (!Gm) return 0;
+    const uintptr_t Data = *reinterpret_cast<uintptr_t*>(Gm + 0xA8);
+    if (!Data) return 0;
+    const uintptr_t Play = *reinterpret_cast<uintptr_t*>(Data + 0xC0);
+    return Play ? *reinterpret_cast<uint32_t*>(Play + 0x68) : 0;
+}
+
+// Lid states by tens: 90 and 120 are open.
+bool LidOpen(uint32_t State) {
+    const uint32_t Tens = State / 10 * 10;
+    return Tens == 90 || Tens == 120;
+}
+
+bool IsSvrEventChest(uintptr_t Box) {
+    return *reinterpret_cast<uintptr_t*>(Box) == g_base + kSvrEventVtable;
+}
+
+// Puts a "taken" handle into the chest: its live drop (if one was made) goes, the
+// handle is restored the way the area load does it, and the chest registers again.
+void ApplyChestTaken(uintptr_t StateMgr, uintptr_t Obj, uintptr_t Box, uint32_t Lot, uint32_t Packed,
+                     AreaStats* S) {
+    const bool Live = ChestDropIsLive(Box);
+    if (Live) {
+        RemoveDrop(Obj);
+        S->WasLive++;
+    }
+    Game<HandleRestoreFn>(kHandleRestore)(StateMgr, Obj, &Lot, &Packed);
+    if (Live) {
+        const uintptr_t Ctrl  = *reinterpret_cast<uintptr_t*>(Obj + 0xB8);
+        const uintptr_t Model = Ctrl ? *reinterpret_cast<uintptr_t*>(Ctrl + 8) : 0;
+        const bool Enable = Model && ((*reinterpret_cast<uint8_t*>(Model + 0xE8) >> 1) & 1);
+        Game<ChestRegFn>(kChestRegister)(Box, Enable ? 1 : 0);
+    }
+    S->ChestsTaken++;
+}
+
+void RestoreChest(uintptr_t StateMgr, uintptr_t Obj, uintptr_t Box, uint32_t AreaId, bool Own,
+                  const int32_t* Full, int32_t* Compact, PendingPod* Pend, int32_t PendCount, AreaStats* S) {
+    S->Chests++;
+    if (IsSvrEventChest(Box)) return;                        // reports its own takes (exe+0x1CEDB0)
+    if (Game<CompByteFn>(kChestKind2)(Box)) return;          // kind 2: left to the game
+    const uint32_t Id = ObjectId(Obj);
+    if (!Id) return;
+
+    // This player's own record of it.
+    uint32_t OwnLot = 0, OwnPacked = 0;
+    bool HaveOwn = false;
+    if (Full) {
+        const int32_t K = FullRecordIndex(Full, Id);
+        if (K >= 0) {
+            OwnLot = static_cast<uint32_t>(Full[0x1002 + K]);
+            OwnPacked = static_cast<uint32_t>(Full[0x1402 + K]);
+            HaveOwn = true;
+        }
+    }
+    if (!HaveOwn && Compact) {
+        const uint32_t K = Game<SlotIndexFn>(kSlotIndex)(Compact, static_cast<int32_t>(Id));
+        if (K < kCompactMax) {
+            OwnLot = static_cast<uint32_t>(Compact[0x182 + K]);
+            OwnPacked = static_cast<uint32_t>(Compact[0x242 + K]);
+            HaveOwn = true;
+        }
+    }
+    const bool OwnTaken = HaveOwn && (OwnPacked & kPackedTaken) && ((OwnPacked >> 10) & 0x3FF) == 0;
+
+    PendingPod* Line = nullptr;
+    for (int32_t P = 0; P < PendCount; ++P) {
+        if (Pend[P].Chest && Pend[P].Area == AreaId && Pend[P].Object == Id) {
+            Line = &Pend[P];
+            break;
+        }
+    }
+
+    if (Own) {
+        // Someone else's world: empty for this player when its own save, or a
+        // chest it emptied elsewhere, says so. The lid stays as the host has it.
+        uint32_t Lot = 0, Packed = 0;
+        if (OwnTaken) {
+            Lot = OwnLot;
+            Packed = OwnPacked;
+        } else if (Line) {
+            Lot = Line->Lot;
+            Packed = (Line->Packed & 0x3003FF) | kPackedTaken;
+        } else {
+            return;
+        }
+        if (*reinterpret_cast<uint8_t*>(Box + kChestTakenOff)) return;   // already empty here
+        ApplyChestTaken(StateMgr, Obj, Box, Lot, Packed, S);
+        return;
+    }
+
+    // Own world: only chests emptied in someone else's world.
+    if (!Line) return;
+    if (OwnTaken) {
+        Line->Applied = 1;   // the game keeps it itself now
+        return;
+    }
+    const uint32_t Cycle = CurrentCycle();
+    if (Line->Cycle && Cycle && Line->Cycle != Cycle) {
+        Line->Applied = 1;   // another NG cycle: the records were reset
+        return;
+    }
+    // The lot as this world rolls it: in multiplayer the lot index follows the
+    // session's cycle, which need not be this save's.
+    int32_t Out[2] = { 0, 0 };
+    const uintptr_t Row = Game<ObjFn>(kObjRow)(Obj);
+    if (Row) {
+        Game<LotComputeFn>(kLotCompute)(Out, 1, *reinterpret_cast<int32_t*>(Row + 0x24),
+                                        static_cast<int32_t>(Game<ObjU32Fn>(kObjLotIndex)(Obj)));
+    }
+    const uint32_t Lot = Out[0] ? static_cast<uint32_t>(Out[0]) : Line->Lot;
+    const uint32_t Packed = (Line->Packed & 0x3003FF) | kPackedTaken;
+    ApplyChestTaken(StateMgr, Obj, Box, Lot, Packed, S);
+    // The lid after the handle, so the open-state handler finds it taken.
+    if (LidOpen(Line->State) && !LidOpen(Game<CompByteFn>(kChestState)(Box))) {
+        Game<ObjStateSetFn>(kObjStateSet)(Obj, static_cast<uint8_t>(Line->State), 0);
+        S->ChestLidsSet++;
+    }
+    S->Remembered++;
+    // The line stays until a later load finds the game's own record saying taken.
+}
+
 void RestoreAreaImpl(uintptr_t StateMgr, uint32_t AreaId, bool Own,
                      PendingPod* Pend, int32_t PendCount, AreaStats* S) {
     const uintptr_t MapMgr = MapManager();
@@ -278,7 +451,11 @@ void RestoreAreaImpl(uintptr_t StateMgr, uint32_t AreaId, bool Own,
 
     const int32_t* Full = nullptr;
     int32_t* Compact = nullptr;
-    if (Own) {
+    // At home the records are read only for remembered chests: a chest line is
+    // forgotten once the game's own record says taken.
+    bool ChestLines = false;
+    for (int32_t P = 0; P < PendCount && !ChestLines; ++P) ChestLines = Pend[P].Chest && Pend[P].Area == AreaId;
+    if (Own || ChestLines) {
         const uintptr_t Store = *reinterpret_cast<uintptr_t*>(MapMgr + 0x200);
         if (Store) {
             Full = Game<RecordFindFn>(kRecordFind)(Store, static_cast<int32_t>(AreaId));
@@ -294,7 +471,18 @@ void RestoreAreaImpl(uintptr_t StateMgr, uint32_t AreaId, bool Own,
         const uintptr_t Obj = ResolveObject(Objects[I]);
         if (!Obj) continue;
         const uintptr_t Comp = Game<ObjFn>(kGetItemDrop)(Obj);
-        if (!Comp) continue;
+        if (!Comp) {
+            const uintptr_t Box = Game<ObjFn>(kChestComp)(Obj);
+            if (Box) RestoreChest(StateMgr, Obj, Box, AreaId, Own, Full, Compact, Pend, PendCount, S);
+            continue;
+        }
+        if (!Own) {
+            // Own world: world items only from remembered lines -- the records are
+            // the game's and it has already put them back.
+            bool Any = false;
+            for (int32_t P = 0; P < PendCount && !Any; ++P) Any = !Pend[P].Chest && Pend[P].Area == AreaId;
+            if (!Any) continue;
+        }
         S->Items++;
         const uint32_t Id = ObjectId(Obj);
         if (!Id) continue;
@@ -303,7 +491,7 @@ void RestoreAreaImpl(uintptr_t StateMgr, uint32_t AreaId, bool Own,
         bool Have = false;
         PendingPod* Remembered = nullptr;
         for (int32_t P = 0; P < PendCount; ++P) {
-            if (Pend[P].Area != AreaId || Pend[P].Object != Id) continue;
+            if (Pend[P].Chest || Pend[P].Area != AreaId || Pend[P].Object != Id) continue;
             // A line that never rolled anything says nothing: use the records.
             if (Pend[P].Lot == 0 && (Pend[P].Packed & 0x3FF) == 0) break;
             Lot = Pend[P].Lot;
@@ -312,7 +500,7 @@ void RestoreAreaImpl(uintptr_t StateMgr, uint32_t AreaId, bool Own,
             Have = true;
             break;
         }
-        if (!Have && Full) {
+        if (!Have && Full && Own) {
             const int32_t K = FullRecordIndex(Full, Id);
             if (K >= 0) {
                 Lot = static_cast<uint32_t>(Full[0x1002 + K]);
@@ -321,7 +509,7 @@ void RestoreAreaImpl(uintptr_t StateMgr, uint32_t AreaId, bool Own,
                 S->FromFull++;
             }
         }
-        if (!Have && Compact) {
+        if (!Have && Compact && Own) {
             const uint32_t K = Game<SlotIndexFn>(kSlotIndex)(Compact, static_cast<int32_t>(Id));
             if (K < kCompactMax) {
                 Lot = static_cast<uint32_t>(Compact[0x182 + K]);
@@ -404,14 +592,34 @@ void FindDropImpl(uint64_t Handle, PickupProbe* P) {
             const uintptr_t Obj = ResolveObject(Objects[I]);
             if (!Obj) continue;
             const uintptr_t Comp = Game<ObjFn>(kGetItemDrop)(Obj);
-            if (!Comp || *reinterpret_cast<uint64_t*>(Comp + kHandleOff) != Handle) continue;
+            if (Comp && *reinterpret_cast<uint64_t*>(Comp + kHandleOff) == Handle) {
+                P->Object = Obj;
+                P->Comp = Comp;
+                P->Area = *reinterpret_cast<uint32_t*>(Area + 8);
+                P->Id = ObjectId(Obj);
+                Game<HandleWordFn>(kHandleLot)(Comp + kHandleOff, &P->LotBefore);
+                P->PackedBefore = 0;
+                Game<HandleWordFn>(kHandlePack)(Comp + kHandleOff, &P->PackedBefore);
+                P->Found = 1;
+                return;
+            }
+            // A chest's contents are its own drop, at +0x68 of its component: the
+            // pickup of a chest used to be logged as "not a world item".
+            if (Comp) continue;
+            const uintptr_t Box = Game<ObjFn>(kChestComp)(Obj);
+            if (!Box || *reinterpret_cast<uint64_t*>(Box + kChestHandleOff) != Handle) continue;
             P->Object = Obj;
-            P->Comp = Comp;
+            P->Comp = Box;
             P->Area = *reinterpret_cast<uint32_t*>(Area + 8);
             P->Id = ObjectId(Obj);
-            Game<HandleWordFn>(kHandleLot)(Comp + kHandleOff, &P->LotBefore);
+            Game<HandleWordFn>(kHandleLot)(Box + kChestHandleOff, &P->LotBefore);
             P->PackedBefore = 0;
-            Game<HandleWordFn>(kHandlePack)(Comp + kHandleOff, &P->PackedBefore);
+            Game<HandleWordFn>(kHandlePack)(Box + kChestHandleOff, &P->PackedBefore);
+            P->Chest = 1;
+            P->State = Game<CompByteFn>(kChestState)(Box);
+            P->Kind2 = Game<CompByteFn>(kChestKind2)(Box) ? 1 : 0;
+            P->SvrEvent = IsSvrEventChest(Box) ? 1 : 0;
+            P->Cycle = CurrentCycle();
             P->Found = 1;
             return;
         }
@@ -419,10 +627,12 @@ void FindDropImpl(uint64_t Handle, PickupProbe* P) {
 }
 
 void SnapshotAfterImpl(PickupProbe* P) {
-    Game<HandleWordFn>(kHandleLot)(P->Comp + kHandleOff, &P->LotAfter);
+    const uintptr_t HandleAt = P->Comp + (P->Chest ? kChestHandleOff : kHandleOff);
+    Game<HandleWordFn>(kHandleLot)(HandleAt, &P->LotAfter);
     P->PackedAfter = 0;
-    Game<HandleWordFn>(kHandlePack)(P->Comp + kHandleOff, &P->PackedAfter);
-    P->StillLive = DropIsLive(P->Comp) ? 1 : 0;
+    Game<HandleWordFn>(kHandlePack)(HandleAt, &P->PackedAfter);
+    P->StillLive = (P->Chest ? ChestDropIsLive(P->Comp) : DropIsLive(P->Comp)) ? 1 : 0;
+    if (P->Chest) P->State = Game<CompByteFn>(kChestState)(P->Comp);
 }
 
 bool RestoreAreaSafe(uintptr_t StateMgr, uint32_t AreaId, bool Own,
@@ -490,11 +700,18 @@ void SavePendingLocked() {
     Out << "# World items picked up in someone else's world (DS2 Seamless Co-op).\n"
            "# Each line is applied the next time that area loads in the owner's own world,\n"
            "# where the game then saves it like any other pickup, and the line goes away.\n"
-           "# owner\tarea\tobject\tlot\tstate\n";
-    char Numbers[64];
+           "# owner\tarea\tobject\tlot\tstate\n"
+           "# A chest emptied there: owner\tarea\tobject\tlot\tstate\tC\tlid\tcycle -- kept until\n"
+           "# the owner's own save says the chest is empty.\n";
+    char Numbers[96];
     for (const Pending& E : g_pending) {
-        std::snprintf(Numbers, sizeof(Numbers), "\t%08X\t%08X\t%08X\t%08X\n",
-                      E.Area, E.Object, E.Lot, E.Packed);
+        if (E.Chest) {
+            std::snprintf(Numbers, sizeof(Numbers), "\t%08X\t%08X\t%08X\t%08X\tC\t%u\t%u\n",
+                          E.Area, E.Object, E.Lot, E.Packed, E.State, E.Cycle);
+        } else {
+            std::snprintf(Numbers, sizeof(Numbers), "\t%08X\t%08X\t%08X\t%08X\n",
+                          E.Area, E.Object, E.Lot, E.Packed);
+        }
         Out << E.Owner << Numbers;
     }
 }
@@ -507,7 +724,8 @@ void LoadPending() {
     while (std::getline(In, Line)) {
         if (Line.empty() || Line[0] == '#') continue;
         const std::vector<std::string> Parts = SplitTabs(Line);
-        if (Parts.size() != 5 || Parts[0].empty()) continue;
+        const bool ChestLine = Parts.size() == 8 && Parts[5] == "C";
+        if ((Parts.size() != 5 && !ChestLine) || Parts[0].empty()) continue;
         try {
             Pending E;
             E.Owner = Parts[0];
@@ -515,6 +733,11 @@ void LoadPending() {
             E.Object = static_cast<uint32_t>(std::stoul(Parts[2], nullptr, 16));
             E.Lot = static_cast<uint32_t>(std::stoul(Parts[3], nullptr, 16));
             E.Packed = static_cast<uint32_t>(std::stoul(Parts[4], nullptr, 16));
+            if (ChestLine) {
+                E.Chest = true;
+                E.State = static_cast<uint32_t>(std::stoul(Parts[6]));
+                E.Cycle = static_cast<uint32_t>(std::stoul(Parts[7]));
+            }
             g_pending.push_back(E);
         } catch (...) {
             LOG_WARNING("[LOOT] skipping an unreadable line in %s", kPendingFile);
@@ -528,7 +751,7 @@ std::vector<PendingPod> OwnerPods(const std::string& Owner, bool AllAreas, uint3
     std::lock_guard<std::mutex> Lock(g_pendingMutex);
     for (const Pending& E : g_pending) {
         if (E.Owner != Owner || (!AllAreas && E.Area != AreaId)) continue;
-        Pods.push_back(PendingPod{ E.Area, E.Object, E.Lot, E.Packed, 0 });
+        Pods.push_back(PendingPod{ E.Area, E.Object, E.Lot, E.Packed, 0, E.Chest ? 1u : 0u, E.State, E.Cycle });
     }
     return Pods;
 }
@@ -541,7 +764,7 @@ uint32_t ForgetApplied(const std::string& Owner, const std::vector<PendingPod>& 
         if (!Pod.Applied) continue;
         for (size_t I = 0; I < g_pending.size(); ++I) {
             const Pending& E = g_pending[I];
-            if (E.Owner == Owner && E.Area == Pod.Area && E.Object == Pod.Object) {
+            if (E.Owner == Owner && E.Area == Pod.Area && E.Object == Pod.Object && E.Chest == (Pod.Chest != 0)) {
                 g_pending.erase(g_pending.begin() + static_cast<std::ptrdiff_t>(I));
                 ++Removed;
                 break;
@@ -562,6 +785,55 @@ uint32_t TakenState(const PickupProbe& P) {
     return (Base & ~0xFFFFFu) | Rolled;
 }
 
+// A chest emptied in someone else's world: remembered with its lid and cycle, so
+// the owner's own copy of that chest is open and empty too.
+void RememberChest(const PickupProbe& P, const std::string& Owner) {
+    const uint32_t Lot = P.LotAfter ? P.LotAfter : P.LotBefore;
+    if (P.Kind2 || P.SvrEvent || Lot == kKind2Lot) {
+        LOG_INFO("[LOOT] chest %u in area %u is of a kind the game keeps by itself -- not remembered", P.Id, P.Area);
+        return;
+    }
+    if (!(P.PackedAfter & kPackedTaken) || ((P.PackedAfter >> 10) & 0x3FF)) {
+        LOG_INFO("[LOOT] chest %u in area %u still holds something (handle %08X) -- not remembered yet",
+                 P.Id, P.Area, P.PackedAfter);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> Lock(g_pendingMutex);
+        bool Replaced = false;
+        for (Pending& E : g_pending) {
+            if (E.Owner == Owner && E.Area == P.Area && E.Object == P.Id && E.Chest) {
+                E.Lot = Lot;
+                E.Packed = P.PackedAfter;
+                E.State = P.State;
+                E.Cycle = P.Cycle;
+                Replaced = true;
+                break;
+            }
+        }
+        if (!Replaced) {
+            Pending E;
+            E.Owner = Owner;
+            E.Area = P.Area;
+            E.Object = P.Id;
+            E.Lot = Lot;
+            E.Packed = P.PackedAfter;
+            E.Chest = true;
+            E.State = P.State;
+            E.Cycle = P.Cycle;
+            g_pending.push_back(E);
+        }
+        SavePendingLocked();
+    }
+    LOG_INFO("[LOOT] chest emptied in multiplayer: area %u object %u lot %u (handle %08X -> %08X, lid %u, cycle %u)"
+             " -- %s's own chest will be open and empty as well",
+             P.Area, P.Id, Lot, P.PackedBefore, P.PackedAfter, P.State, P.Cycle, Owner.c_str());
+    UI::Overlay::GetInstance().ShowNotification(
+        UI::Tr("Chest emptied \xE2\x80\x94 it will be empty in your own world too",
+               "Сундук опустошён \xE2\x80\x94 в твоём мире он тоже будет пустым"),
+        2.5f, UI::NotifyKind::Success);
+}
+
 void RememberPickup(const PickupProbe& P) {
     if (P.StillLive) {
         LOG_INFO("[LOOT] object %u was not taken after all -- nothing to remember", P.Id);
@@ -574,6 +846,10 @@ void RememberPickup(const PickupProbe& P) {
     const std::string Owner = PlayerSync::GetInstance().GetLocalCharacterName();
     if (Owner.empty()) {
         LOG_WARNING("[LOOT] picked up object %u but the character name is unreadable -- not remembered", P.Id);
+        return;
+    }
+    if (P.Chest) {
+        RememberChest(P, Owner);
         return;
     }
     const uint32_t Lot = P.LotAfter ? P.LotAfter : P.LotBefore;
@@ -677,9 +953,9 @@ void __fastcall AreaRestoreDetour(uintptr_t StateMgr, uint64_t AreaArg) {
 
     if (Mp) {
         LOG_INFO("[LOOT] area %u loaded in multiplayer: %u world items, %u put back from your save"
-                 " (%u full + %u compact), %u remembered pickups, %u rebuilt",
+                 " (%u full + %u compact), %u remembered pickups, %u rebuilt; %u chests, %u empty for you",
                  AreaId, S.Items, S.FromFull + S.FromCompact, S.FromFull, S.FromCompact,
-                 S.Remembered, S.WasLive);
+                 S.Remembered, S.WasLive, S.Chests, S.ChestsTaken);
         const ULONGLONG Now = GetTickCount64();
         if (S.Items && Now - g_lastAreaToast.load() > 120000) {
             g_lastAreaToast.store(Now);
@@ -689,9 +965,45 @@ void __fastcall AreaRestoreDetour(uintptr_t StateMgr, uint64_t AreaArg) {
                 3.5f, UI::NotifyKind::Info);
         }
     } else {
-        LOG_INFO("[LOOT] area %u in your own world: %u pickups made in multiplayer applied (%u now kept by the game)",
-                 AreaId, S.Remembered, Forgotten);
+        LOG_INFO("[LOOT] area %u in your own world: %u pickups made in multiplayer applied (%u now kept by the game);"
+                 " %u chests emptied, %u lids opened",
+                 AreaId, S.Remembered, Forgotten, S.ChestsTaken, S.ChestLidsSet);
     }
+}
+
+// A chest that is already empty must not roll its lot again. The open-state
+// handler (exe+0x1D0520) checks for that before it asks; the opening animation's
+// call (exe+0x1D06C0, state 50) and the drop rebuild (exe+0x3B9FD0) do not, and a
+// chest emptied elsewhere but closed here would hand its item out a second time.
+// exe+0x1CF930 returns nothing and starts with PUSH RBP / PUSH RDI / PUSH R14 --
+// whole instructions, no RIP use.
+using ChestInitFn = void(__fastcall*)(uintptr_t comp, char flag);
+ChestInitFn g_chestInit = nullptr;
+std::atomic<uint32_t> g_chestRerollsRefused{ 0 };
+
+bool ChestAlreadyEmptySafe(uintptr_t Box, uint32_t* Lot) {
+    __try {
+        if (IsSvrEventChest(Box)) return false;   // reports its own takes
+        *Lot = *reinterpret_cast<uint32_t*>(Box + kChestLotOff);
+        return *Lot != 0 && *reinterpret_cast<uint8_t*>(Box + kChestTakenOff) != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void __fastcall ChestInitDetour(uintptr_t Box, char Flag) {
+    if (Box && g_ok.load() && g_enabled.load() && !g_broken.load()) {
+        uint32_t Lot = 0;
+        if (ChestAlreadyEmptySafe(Box, &Lot)) {
+            const uint32_t N = g_chestRerollsRefused.fetch_add(1) + 1;
+            if (N <= 10 || N % 100 == 0) {
+                LOG_INFO("[LOOT] an emptied chest (lot %u) was about to roll its contents again -- left empty (%u so far)",
+                         Lot, N);
+            }
+            return;
+        }
+    }
+    g_chestInit(Box, Flag);
 }
 
 // What a drop holds, and what the inventory made of it -- logged for every
@@ -757,7 +1069,7 @@ void LogPickup(uint64_t Handle, const PickupProbe& P, bool HaveContents, const D
         }
     }
     char Where[64] = "not a world item";
-    if (P.Found) std::snprintf(Where, sizeof(Where), "area %u object %u", P.Area, P.Id);
+    if (P.Found) std::snprintf(Where, sizeof(Where), "area %u %s %u", P.Area, P.Chest ? "chest" : "object", P.Id);
     LOG_INFO("[LOOT] pickup of drop %016llX (%s): %s -> inventory %s (%08X), drop %s",
              static_cast<unsigned long long>(Handle), Where, Items.c_str(),
              !HaveVerdict ? "unreadable" : (Verdict & 0x80000000u) ? "REFUSED" : "took it",
@@ -859,6 +1171,11 @@ bool InstallLootSync() {
     // Independent of the rest: without it a replayed pickup fills the wrong bag.
     Hook(kPickupExec, reinterpret_cast<void*>(&PickupExecDetour),
          reinterpret_cast<void**>(&g_pickupExec), "the pickup action (own pickups only)");
+    // Chests: an emptied chest never rolls its contents a second time.
+    if (g_ok.load()) {
+        Hook(kChestInit, reinterpret_cast<void*>(&ChestInitDetour),
+             reinterpret_cast<void**>(&g_chestInit), "the chest lot roll (an emptied chest stays empty)");
+    }
 
     size_t Remembered = 0;
     {
