@@ -155,6 +155,9 @@ void NotePartnerBoss(int32_t active, int32_t phase, int32_t areaIndex, int32_t p
 // Whether a guest starts its own copy of the host's boss fight (ini boss_sync).
 void SetBossSyncEnabled(bool on);
 bool IsHostInBossFight();             // a recent BossState from the host says a fight is on
+// A guest's copy of a boss fight the host won is handing out its reward right
+// now (phase 3 of that battle here): the owner-only gates may let this guest in.
+bool GuestBossRewardDue();
 void CancelDeathRejoin();             // leaving on purpose: no automatic return
 // Put a sign down again for the host to summon, without the once-per-handshake
 // limit of the automatic join (player_sync.cpp).

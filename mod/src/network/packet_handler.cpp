@@ -93,7 +93,10 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
         case PacketType::FlagBulk:
             if (packet->size >= sizeof(FlagBulkPacket)) {
                 const auto* Bulk = reinterpret_cast<const FlagBulkPacket*>(packet);
-                DS2Coop::Sync::NoteRemoteFlagBulk(Bulk->group, Bulk->bits, Bulk->bytes);
+                // The byte count comes off the wire: never past the array it describes.
+                const uint32_t Bytes = Bulk->bytes <= sizeof(Bulk->bits) ? Bulk->bytes
+                                                                         : static_cast<uint32_t>(sizeof(Bulk->bits));
+                DS2Coop::Sync::NoteRemoteFlagBulk(Bulk->group, Bulk->bits, Bytes);
             }
             break;
 

@@ -86,10 +86,17 @@ constexpr uint32_t kNetEnemyReset  = 0x517080;    // (NetEnemyManager): the game
 constexpr uint32_t kNetEnemyVtable = 0x10FB580;   // NetEnemyManager, *(netRoot)+0x28
 constexpr uint32_t kPhantomParam   = 0x16F540;    // (phantom type) -> that type's param row ([GMImp+0x18] lookup)
 constexpr uint32_t kAcceptEvent    = 0x2BD0D0;    // NetSummonAcceptMultiplayCtrl slot E0 (ctrl, reason): a host event for one guest
+constexpr uint32_t kBossPhaseTwo   = 0x1810E0;    // (boss manager): script command 0x2046A, "the boss is dead" -> phase 2
+constexpr uint32_t kBossAbort      = 0x180EC0;    // (boss manager): script command 0x2046C, the fight called off (phase 1 only)
 
 constexpr int kAcceptBossKilled = 1;              // accept controller reason: a boss died in the host's world
 constexpr int kBranchDutyDone   = 1;              // phantom branch reason: the boss is dead, duty fulfilled
-constexpr uint32_t kResultDoneByte = 0xCE;        // EventResult: set by both branches once they have run
+constexpr uint32_t kResultLeaving  = 0xCE;        // EventResult: a sequence that ends in leaving; new records dropped
+constexpr uint32_t kResultFrozen   = 0xCF;        // EventResult: set when such a sequence ends; no updates after
+constexpr int32_t  kResultBossKilled = 0x12;      // result code of a boss kill
+constexpr ULONGLONG kHostKillFreshMs  = 30000;    // a kill the host reported counts this long here
+constexpr ULONGLONG kHostEndGraceMs   = 5000;     // a fight that ended with no kill heard of: wait this long
+constexpr ULONGLONG kHostKillRepeatMs = 10000;    // the host repeats a kill this long after the fight is over
 
 // The camera (docs §3.23). Offsets, not RVAs: all of them hang off GMImp.
 constexpr uint32_t kCameraManager  = 0x20;        // [GMImp+0x20]  CameraManager
@@ -124,6 +131,7 @@ using CamCmdFn   = void(__fastcall*)(void*, void*);
 using BattleStartFn = uint64_t(__fastcall*)(void*, int32_t, int32_t);
 using NetEnemyResetFn = void(__fastcall*)(void*);
 using AcceptEventFn = void(__fastcall*)(void*, int);
+using BossMgrFn = void(__fastcall*)(void*);
 
 // Set by MH_CreateHook before the hook goes live, so a detour never sees null.
 void* g_phantomBranchOriginal = nullptr;
@@ -152,6 +160,13 @@ std::atomic<int32_t>   g_partnerBossCount{ 0 };     // the host's participant co
 std::atomic<bool>      g_bossSync{ true };          // ini boss_sync
 std::atomic<int32_t>   g_guestBattleTriedFor{ 0 };  // one start attempt per host fight
 std::atomic<int32_t>   g_guestBattleRunning{ 0 };   // the battle the mod started here
+std::atomic<int32_t>   g_hostKilledBattle{ 0 };     // guest: the host reported this fight in phase 2 or 3
+std::atomic<ULONGLONG> g_hostKilledAt{ 0 };
+std::atomic<int32_t>   g_hostEndedBattle{ 0 };      // guest: the host's fight went from running to none
+std::atomic<ULONGLONG> g_hostEndedAt{ 0 };
+std::atomic<int32_t>   g_guestKilled{ 0 };          // guest: the fight driven to its end here
+std::atomic<ULONGLONG> g_guestKilledAt{ 0 };
+void*                  g_phaseTwoOriginal = nullptr;
 
 // The executable's base never moves: asked for once, not every frame.
 uintptr_t ExeBase() {
@@ -428,14 +443,27 @@ void SendBossState(int32_t Active, int32_t Phase, int32_t AreaIndex, int32_t Par
     Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
 }
 
-// What both branches do last, after sending the phantom on its way: the result
-// job that called them counts as run.
-void MarkBranchDone(void* Result) {
+// A guest that stays after a won boss fight: the "duty fulfilled" result must
+// not leave the EventResult marked as leaving. A sequence whose row sends the
+// phantom home sets +0xCE when it is built (exe+0x18F9C0); while that is set every
+// new record is dropped (exe+0x190410), and when the sequence ends +0xCF is set
+// (exe+0x1906B0), which stops the object's update until the next map load
+// (exe+0x190480). A guest that stayed and died later would get no death at all.
+// ResultSeqDetour keeps the leave out of the row in the first place; this is for
+// a branch that still arrives.
+void KeepResultAlive(void* Result) {
     __try {
-        *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(Result) + kResultDoneByte) = 1;
+        *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(Result) + kResultLeaving) = 0;
+        *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(Result) + kResultFrozen) = 0;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        LOG_WARNING("[DEATH] could not mark the result as done");
+        LOG_WARNING("[DEATH] could not clear the result's leaving marks");
     }
+}
+
+// Staying after a won fight: a guest in the host's world, on its feet, with the
+// death handling on. The branch decision and the row fix both ask this.
+bool GuestStaysAfterWin(int Join, int32_t Hp) {
+    return g_enabled.load() && Join == kJoinInWorld && IsAlive(Hp);
 }
 
 // --- detours -----------------------------------------------------------------
@@ -459,7 +487,7 @@ void __fastcall PhantomBranchDetour(void* Result, int Reason) {
     // it had to join again). In seamless co-op the partner stays. The rest of that
     // result -- the message, and the reward jobs built from the row's dwords at
     // +8/+0xC -- runs as before; only the trip home is left out.
-    const bool Stay     = g_enabled.load() && Guest && Reason == kBranchDutyDone && IsAlive(Hp);
+    const bool Stay     = Reason == kBranchDutyDone && GuestStaysAfterWin(Join, Hp);
     // Held: the fight goes on while someone is still standing in it.
     const bool HoldBack = !Stay && g_enabled.load() && Guest && InBoss && (OwnDeath ? Partner : IsAlive(Hp));
     const bool Back     = !Stay && g_enabled.load() && Guest && !HoldBack;
@@ -469,7 +497,10 @@ void __fastcall PhantomBranchDetour(void* Result, int Reason) {
                   : HoldBack ? "HELD until the fight is decided" : Back ? "home, then straight back" : "the game's way");
 
     if (Stay) {
-        MarkBranchDone(Result);
+        // Normally the row reaches the game without its leave and this branch never
+        // comes (ResultSeqDetour). If it does, the result was built as leaving:
+        // clear that, or the next death of this guest would have no result.
+        KeepResultAlive(Result);
         Toast("Boss defeated -- you stay in the host's world", "Босс повержен — остаёшься в мире хоста",
               UI::NotifyKind::Player);
         return;
@@ -810,6 +841,23 @@ void* __fastcall ResultSeqDetour(void* Result, void* Out, void* Arg3, const int*
     // fight; the boss being dead is exactly what that message says.
     uint8_t Copy[24];
     const uint8_t* Use = Row;
+
+    // A won boss fight while this guest stays: "duty fulfilled" (row byte 3 = 1)
+    // and the guest's own boss kill (code 0x12, whose row a guest has never been
+    // seen to build) go to the game without their leave. A row with byte 3 set
+    // marks the whole EventResult as leaving and, once its sequence ends, frozen
+    // until the next map load (KeepResultAlive says why) -- and nobody is leaving.
+    // Everything else in the row runs: the message, and the reward jobs the dwords
+    // at +8/+0xC build (humanity restored with the flag at +0x10).
+    if (Row && Code && Row[3] != 0 && (Row[3] == kBranchDutyDone || *Code == kResultBossKilled) &&
+        GuestStaysAfterWin(ReadJoinState(), ReadLocalHp())) {
+        for (int I = 0; I < 24; ++I) Copy[I] = Row[I];
+        Copy[3] = 0;
+        Use = Copy;
+        LOG_INFO("[DEATH] a won boss fight while I stay in the host's world -- code %d built without its "
+                 "return home (row byte 3 was %u)", *Code, static_cast<unsigned>(Row[3]));
+    }
+
     if (Row && Row[1] && (Row[3] == 2 || Row[3] == 3)) {
         const int     Join = ReadJoinState();
         const int32_t Hp   = ReadLocalHp();
@@ -829,6 +877,29 @@ void* __fastcall ResultSeqDetour(void* Result, void* Out, void* Arg3, const int*
         }
     }
     return reinterpret_cast<SeqFn>(g_resultSeqOriginal)(Result, Out, Arg3, Code, Use);
+}
+
+// Phase 2 of a boss fight, "the boss is dead" (exe+0x1810E0, script command
+// 0x2046A): logged with its caller on both sides. Refused for a manager with no
+// fight (no boss row) or not in phase 1: the function writes phase 2 whatever
+// the phase was, so a late call would take a finished fight back to phase 2 and
+// post its result -- and its rewards -- a second time. Starts with
+// CMP dword [rcx+0x204],2 (83 B9 04 02 00 00 02): seven whole bytes, no RIP use.
+void __fastcall BossPhaseTwoDetour(void* Mgr) {
+    const uintptr_t Caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
+    int32_t Active = 0, Phase = -1;
+    uintptr_t Row = 0;
+    const bool Read = Mgr && ReadI32(reinterpret_cast<uintptr_t>(Mgr) + 0x14, &Active) &&
+                      ReadI32(reinterpret_cast<uintptr_t>(Mgr) + 0x204, &Phase);
+    if (Read) ReadPtr(reinterpret_cast<uintptr_t>(Mgr) + 0x18, &Row);
+    if (Read && (Row == 0 || Phase != 1)) {
+        LOG_INFO("[BOSS] phase 2 asked for battle %d in phase %d%s (from exe+0x%llX) -- refused", Active, Phase,
+                 Row ? "" : " with no boss row", static_cast<unsigned long long>(Caller - ExeBase()));
+        return;
+    }
+    LOG_INFO("[BOSS] battle %d: the boss is dead, phase 2 (from exe+0x%llX)", Active,
+             static_cast<unsigned long long>(Caller - ExeBase()));
+    reinterpret_cast<BossMgrFn>(g_phaseTwoOriginal)(Mgr);
 }
 
 // Every boss battle start, logged with its caller -- and the one call a guest
@@ -993,6 +1064,10 @@ void TickLife(int32_t Hp) {
 
 // Logs the local fight when it changes; the host also tells its guest, on every
 // change and again every few seconds while a fight runs.
+int32_t   g_hostKillBattle      = 0;   // host, game thread: the fight that ended in a kill
+ULONGLONG g_hostKillRepeatUntil = 0;
+ULONGLONG g_hostKillSentAt      = 0;
+
 void TickBoss(int Join) {
     int32_t Active = -1, Phase = -1;
     if (!ReadBoss(&Active, &Phase)) return;
@@ -1010,6 +1085,74 @@ void TickBoss(int Join) {
         int32_t Area = -1, Count = 0;
         ReadBossExtra(&Area, &Count);
         SendBossState(Active, Phase, Area, Count);
+    }
+
+    // A kill is said again every two seconds for ten after the fight is over.
+    // Phases 2 and 3 go out once each, and a guest that heard neither would take
+    // "no fight" for a fight called off and end its copy without the reward.
+    if (Active > 0 && (Phase == 2 || Phase == 3)) {
+        g_hostKillBattle = Active;
+        g_hostKillRepeatUntil = 0;
+    } else if (Active <= 0 && g_hostKillBattle > 0 && g_hostKillRepeatUntil == 0) {
+        g_hostKillRepeatUntil = Now + kHostKillRepeatMs;
+    }
+    if (g_hostKillRepeatUntil) {
+        if (Now >= g_hostKillRepeatUntil) {
+            g_hostKillBattle = 0;
+            g_hostKillRepeatUntil = 0;
+        } else if (Now - g_hostKillSentAt >= 2000) {
+            g_hostKillSentAt = Now;
+            SendBossState(g_hostKillBattle, 3, -1, 0);
+        }
+    }
+}
+
+// A guest's copy of the host's fight, once the host's has ended.
+//
+// The phase moves 1 -> 2 in one place only, exe+0x1810E0, and only the boss
+// script's command 0x2046A calls it; exe+0x181490 itself never does, whatever the
+// slots' HP. The guest's copy was started by the mod, its script never got into
+// the fight, and on 16.09 evening the copy sat in phase 1 with an empty bar after
+// the boss had died on both machines -- phase 3, where the souls are given to the
+// local player (exe+0x181950) and the reward item (exe+0x181850), never came.
+// So when the host reports the kill, the same function runs here; when the host's
+// fight just stops with no kill heard of, the game's own abort ends the copy.
+void TickGuestBossEnd(uintptr_t Boss) {
+    if (!Boss) return;
+    __try {
+        const int32_t   Active = *reinterpret_cast<const int32_t*>(Boss + 0x14);
+        const int32_t   Phase  = *reinterpret_cast<const int32_t*>(Boss + 0x204);
+        const uintptr_t Row    = *reinterpret_cast<const uintptr_t*>(Boss + 0x18);
+        if (Active <= 0 || Phase != 1 || Row == 0) return;
+        const ULONGLONG Now = GetTickCount64();
+
+        const ULONGLONG KilledAt = g_hostKilledAt.load();
+        if (g_hostKilledBattle.load() == Active && KilledAt && Now - KilledAt < kHostKillFreshMs) {
+            const BossMgrFn PhaseTwo = g_phaseTwoOriginal ? reinterpret_cast<BossMgrFn>(g_phaseTwoOriginal)
+                                                          : reinterpret_cast<BossMgrFn>(ExeBase() + kBossPhaseTwo);
+            PhaseTwo(reinterpret_cast<void*>(Boss));
+            const int32_t After = *reinterpret_cast<const int32_t*>(Boss + 0x204);
+            g_guestKilled.store(Active);
+            g_guestKilledAt.store(Now);
+            g_hostEndedBattle.store(0);
+            LOG_INFO("[BOSS] the host killed %d -- this copy of the fight goes on to its end here (phase 1 -> %d)",
+                     Active, After);
+            return;
+        }
+
+        const ULONGLONG EndedAt = g_hostEndedAt.load();
+        if (g_hostEndedBattle.load() == Active && EndedAt && Now - EndedAt >= kHostEndGraceMs &&
+            !PartnerBossFight()) {
+            g_hostEndedBattle.store(0);
+            reinterpret_cast<BossMgrFn>(ExeBase() + kBossAbort)(reinterpret_cast<void*>(Boss));
+            const int32_t NowActive = *reinterpret_cast<const int32_t*>(Boss + 0x14);
+            const int32_t NowPhase  = *reinterpret_cast<const int32_t*>(Boss + 0x204);
+            LOG_INFO("[BOSS] the host's fight %d ended with no kill -- called off here too (now %d running, phase %d)",
+                     Active, NowActive, NowPhase);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LOG_WARNING("[BOSS] ending the copy of the host's fight here threw -- boss sync is off for the rest of this run");
+        g_bossSync.store(false);
     }
 }
 
@@ -1029,6 +1172,7 @@ void TickBoss(int Join) {
 // and the guest starts the same battle with the game's own function.
 void TickGuestBoss(int Join) {
     if (!g_bossSync.load() || Join != kJoinInWorld) return;
+    TickGuestBossEnd(BossManagerPtr());
     if (!PartnerBossFight()) {
         g_guestBattleTriedFor.store(0);
         g_guestBattleRunning.store(0);
@@ -1040,13 +1184,26 @@ void TickGuestBoss(int Join) {
     const int32_t HostBattle = g_partnerBossActive.load();
     const int32_t HostArea   = g_partnerBossArea.load();
     const int32_t HostCount  = g_partnerBossCount.load();
+    // The four values arrive together but are stored one by one on the network
+    // thread: a packet saying the fight is over can land between the reads.
+    if (HostBattle <= 0) return;
+    // A late or repeated "running" for a boss already killed here must not start
+    // a fight with a dead boss.
+    const ULONGLONG KilledAt = g_guestKilledAt.load();
+    if (HostBattle == g_guestKilled.load() && KilledAt && GetTickCount64() - KilledAt < 5 * 60 * 1000) return;
     __try {
         // The fog: at least one participant, or the prompts stay off.
         uint8_t* Count = reinterpret_cast<uint8_t*>(Boss + 0x210);
         if (*Count == 0) {
             *Count = static_cast<uint8_t>(HostCount > 0 && HostCount < 256 ? HostCount : 1);
-            LOG_INFO("[BOSS] the host is fighting %d -- participant count here set to %u, so the fog lets me in",
-                     HostBattle, static_cast<unsigned>(*Count));
+            // Once per fight in the log: if something here zeroes the count again
+            // every frame, this would otherwise write a line every frame.
+            static int32_t s_countLoggedFor = 0;
+            if (s_countLoggedFor != HostBattle) {
+                s_countLoggedFor = HostBattle;
+                LOG_INFO("[BOSS] the host is fighting %d -- participant count here set to %u, so the fog lets me in",
+                         HostBattle, static_cast<unsigned>(*Count));
+            }
         }
 
         // The battle: once per host fight, and only from a clean state.
@@ -1073,8 +1230,12 @@ void TickGuestBoss(int Join) {
                         HostBattle, HostArea);
             return;
         }
-        const uint64_t Ok = reinterpret_cast<BattleStartFn>(ExeBase() + kBattleStart)(
-            reinterpret_cast<void*>(Boss), HostArea, HostBattle);
+        // Through the trampoline: the hooked address would run BattleStartDetour's
+        // own guard on the mod's call as well.
+        const BattleStartFn Start = g_battleStartOriginal
+            ? reinterpret_cast<BattleStartFn>(g_battleStartOriginal)
+            : reinterpret_cast<BattleStartFn>(ExeBase() + kBattleStart);
+        const uint64_t Ok = Start(reinterpret_cast<void*>(Boss), HostArea, HostBattle);
         const int32_t NowActive = *reinterpret_cast<const int32_t*>(Boss + 0x14);
         const int32_t NowPhase  = *reinterpret_cast<const int32_t*>(Boss + 0x204);
         LOG_INFO("[BOSS] started the host's battle %d in area %d here -> %s (now %d running, phase %d)",
@@ -1519,6 +1680,7 @@ bool InstallDeathSync(bool Enabled) {
         HookAt(kResultSequence, reinterpret_cast<void*>(&ResultSeqDetour), &g_resultSeqOriginal, "death result sequence");
         HookAt(kBattleStart, reinterpret_cast<void*>(&BattleStartDetour), &g_battleStartOriginal, "boss battle start");
         HookAt(kAcceptEvent, reinterpret_cast<void*>(&AcceptEventDetour), &g_acceptEventOriginal, "guest accept controller event");
+        HookAt(kBossPhaseTwo, reinterpret_cast<void*>(&BossPhaseTwoDetour), &g_phaseTwoOriginal, "boss phase 2");
     }
     LOG_INFO("[DEATH] death handling %s", Enabled ? "ON: back in the partner's world after a death, boss fights wait for both"
                                                   : "off (death_respawn=false): the game's own way, probes only");
@@ -1573,7 +1735,18 @@ void NotePartnerBoss(int32_t Active, int32_t Phase, int32_t AreaIndex, int32_t P
     const int32_t WasPhase = g_partnerBossPhase.exchange(Phase);
     g_partnerBossArea.store(AreaIndex);
     g_partnerBossCount.store(Participants);
-    g_partnerBossAt.store(GetTickCount64());
+    const ULONGLONG Now = GetTickCount64();
+    g_partnerBossAt.store(Now);
+    // The end of the host's fight, for the guest's copy (TickGuestBossEnd): a kill
+    // is phase 2 or 3 of that battle, repeated by the host for ten seconds; a fight
+    // that simply stops is "running" followed by "none".
+    if (Active > 0 && (Phase == 2 || Phase == 3)) {
+        g_hostKilledBattle.store(Active);
+        g_hostKilledAt.store(Now);
+    } else if (Active <= 0 && WasActive > 0 && WasPhase == 1) {
+        g_hostEndedBattle.store(WasActive);
+        g_hostEndedAt.store(Now);
+    }
     if (WasActive != Active || WasPhase != Phase) {
         LOG_INFO("[DEATH] the host's boss fight: %d running, phase %d (area %d, %d participant(s))",
                  Active, Phase, AreaIndex, Participants);
@@ -1588,6 +1761,18 @@ void SetBossSyncEnabled(bool On) {
 
 bool IsHostInBossFight() {
     return PartnerBossFight();
+}
+
+// The boss reward item for a guest (MpActiveHook asks): only while the fight
+// this guest's copy was driven to the end of is in phase 3 here -- the one pass
+// in which exe+0x181850 hands out the reward.
+bool GuestBossRewardDue() {
+    const int32_t   Killed = g_guestKilled.load();
+    const ULONGLONG At     = g_guestKilledAt.load();
+    if (Killed <= 0 || !At || GetTickCount64() - At > 2 * 60 * 1000) return false;
+    const uintptr_t Boss = BossManagerPtr();
+    int32_t Active = 0, Phase = 0;
+    return Boss && ReadI32(Boss + 0x14, &Active) && ReadI32(Boss + 0x204, &Phase) && Active == Killed && Phase == 3;
 }
 
 void CancelDeathRejoin() {

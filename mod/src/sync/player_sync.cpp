@@ -394,7 +394,21 @@ uint64_t __fastcall MpActiveHook(void* Session) {
     static const uintptr_t kChestRollReturn = kBase + 0x1D0893;
     static const uintptr_t kGeneratorReturn = kBase + 0x40ED93;
     static const uintptr_t kDropLotReturn   = kBase + 0x1E25E0;
+    static const uintptr_t kBossItemReturn  = kBase + 0x18187C;   // exe+0x181850: the boss reward, owner only
+    static const uintptr_t kBossLotReturn   = kBase + 0x1E2484;   // exe+0x1E2450: that reward's lot, owner only
     const uintptr_t Caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
+    // The boss reward for a guest whose copy of the host's won fight is in phase 3
+    // (death_sync.cpp drives it there): both owner checks on that path, and only
+    // during that pass. The souls come from exe+0x181950, which has no such check.
+    if ((Caller == kBossItemReturn || Caller == kBossLotReturn) && IsGuestInHostWorld() &&
+        DS2Coop::Sync::GuestBossRewardDue()) {
+        static std::atomic<uint32_t> s_bossRewards{ 0 };
+        if (s_bossRewards.fetch_add(1) < 20) {
+            LOG_INFO("[BOSS] the boss reward is handed out here too, as a guest (%s check)",
+                     Caller == kBossItemReturn ? "reward" : "lot");
+        }
+        return 0;
+    }
     // Only once the guest stands in the host's world (join state 7), never
     // during the join load: the first join with this in crashed during that
     // load (12.09 01:24, ee), and this is the one new thing that acts on the

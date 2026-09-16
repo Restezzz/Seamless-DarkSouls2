@@ -21,6 +21,7 @@
 #include "../../include/ui.h"
 #include "../../include/utils.h"
 #include "../../include/ui_settings.h"
+#include <atomic>
 #include <chrono>
 #include <algorithm>
 
@@ -396,6 +397,7 @@ void PeerManager::HandleIncomingPackets() {
 
         // Update peer heartbeat under lock
         PeerInfo senderInfo{};
+        bool knownSender = false;
         {
             std::lock_guard<std::recursive_mutex> lock(m_peersMutex);
             for (auto& peer : m_peers) {
@@ -403,9 +405,22 @@ void PeerManager::HandleIncomingPackets() {
                     peer.lastHeartbeat = NowMs();
                     senderInfo.playerId = peer.playerId;
                     senderInfo.playerName = peer.playerName;
+                    knownSender = true;
                     break;
                 }
             }
+        }
+        // Everything past the handshake comes from a player the handshake let in.
+        // A datagram with the right magic from anyone else -- no password, no
+        // lobby -- is not handed to the game-facing handlers at all.
+        if (!knownSender) {
+            static std::atomic<uint32_t> s_strangers{ 0 };
+            const uint32_t Count = s_strangers.fetch_add(1) + 1;
+            if (Count <= 3 || Count % 500 == 0) {
+                LOG_WARNING("[NET] ignored a packet of type 0x%02X from an address not in the lobby (%u so far)",
+                            static_cast<unsigned>(header->type), Count);
+            }
+            continue;
         }
         senderInfo.address = pkt.sender.sin_addr.s_addr;
         senderInfo.port = ntohs(pkt.sender.sin_port);

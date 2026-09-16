@@ -318,9 +318,12 @@ void SeamlessCoopMod::LoadConfig() {
     // no one for exactly that reason. Such a file is moved to the new default once
     // and saved again. Hand-edited templates (they have no npc_talk line) are left
     // alone, comments and all.
+    // "Older build" also means the file predates boss_sync: a newer file with
+    // npc_talk=false is somebody's own choice and stays as it is.
     constexpr int kConfigVersion = 2;
     int  fileVersion = 0;
     bool talkWrittenOff = false;
+    bool hasBossSync = false;
 
     std::ifstream configFile("ds2_seamless_coop.ini");
     if (configFile.is_open()) {
@@ -367,6 +370,7 @@ void SeamlessCoopMod::LoadConfig() {
                     m_config.boss_fog_wait = (value == "true" || value == "1");
                 } else if (key == "boss_sync") {
                     m_config.boss_sync = (value == "true" || value == "1");
+                    hasBossSync = true;
                 } else if (key == "npc_talk") {
                     m_config.npc_talk = (value == "true" || value == "1");
                     talkWrittenOff = !m_config.npc_talk;
@@ -401,7 +405,7 @@ void SeamlessCoopMod::LoadConfig() {
         }
         configFile.close();
         LOG_INFO("Configuration loaded from file");
-        if (fileVersion < kConfigVersion && talkWrittenOff) {
+        if (fileVersion < kConfigVersion && talkWrittenOff && !hasBossSync) {
             m_config.npc_talk = true;
             LOG_INFO("[CONFIG] npc_talk=false came from an older version's file, when a guest could not talk to NPCs "
                      "by default -- switched to the current default (true) and the file saved as version %d",
