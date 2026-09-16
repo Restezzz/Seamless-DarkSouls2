@@ -209,6 +209,18 @@ uint32_t __fastcall PhantomRowDetour(void* Chr) {
 }
 
 // Returns a bool in AL; the rest of RAX is passed through untouched.
+// The three flag bytes a prompt hands the predicate (01 FC 0F for a script's).
+bool ReadPromptFlags(const uint8_t* Flags, uint8_t Out[3]) {
+    __try {
+        Out[0] = Flags[0];
+        Out[1] = Flags[1];
+        Out[2] = Flags[2];
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 uint64_t __fastcall PromptAllowedDetour(void* Chr, const uint8_t* Flags) {
     // The phantom id is zeroed for the duration of the call rather than the
     // answer being overruled afterwards -- see the top of this file for why the
@@ -221,43 +233,54 @@ uint64_t __fastcall PromptAllowedDetour(void* Chr, const uint8_t* Flags) {
     // the join reached state 7 and before EnableSummoning zeroed the id, and the
     // "no" stayed cached for as long as the guest stood in her zone. Majula only
     // worked because those zones were entered later, with the id already 0.
-    bool      Mine  = false;
-    uintptr_t Type  = 0;
-    uint8_t   Saved = 0;
-    if (g_talkEnabled.load() && Chr &&
-        reinterpret_cast<uintptr_t>(Chr) == LocalPlayer() &&
-        reinterpret_cast<uintptr_t>(_ReturnAddress()) == ExeBase() + kPromptEnterRet &&
-        Session::SessionManager::GetInstance().IsActive() &&
-        ReadPtr(reinterpret_cast<uintptr_t>(Chr) + kTypeInChr, &Type)) {
+    //
+    // 16.09 evening a guest with npc_talk=true could talk to no one, and there was
+    // nothing to read: the id had long been 0, so no swap happened and nothing was
+    // logged. Every answer this player gets in a session is written down now, one
+    // line per prompt, swapped or not -- which prompt, its action and flags, the
+    // phantom id at that moment and the game's answer.
+    const bool Ours = Chr &&
+                      reinterpret_cast<uintptr_t>(Chr) == LocalPlayer() &&
+                      reinterpret_cast<uintptr_t>(_ReturnAddress()) == ExeBase() + kPromptEnterRet &&
+                      Session::SessionManager::GetInstance().IsActive();
+    bool      Swapped = false;
+    uintptr_t Type    = 0;
+    uint8_t   Saved   = 0;
+    if (Ours && ReadPtr(reinterpret_cast<uintptr_t>(Chr) + kTypeInChr, &Type)) {
         __try {
             uint8_t* Id = reinterpret_cast<uint8_t*>(Type + kPhantomIdInType);
             Saved = *Id;
-            if (Saved != 0) {
+            if (g_talkEnabled.load() && Saved != 0) {
                 *Id = 0;
-                Mine = true;
+                Swapped = true;
             }
         } __except (EXCEPTION_EXECUTE_HANDLER) {
-            Mine = false;
+            Swapped = false;
         }
     }
 
     const uint64_t Answer = reinterpret_cast<PromptAllowedFn>(g_promptAllowedOriginal)(Chr, Flags);
 
-    if (Mine) {
+    if (Swapped) {
         __try {
             *reinterpret_cast<uint8_t*>(Type + kPhantomIdInType) = Saved;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
         }
+    }
+    if (Ours) {
         const uintptr_t Prompt = reinterpret_cast<uintptr_t>(Flags) - kFlagsInPrompt;
-        int32_t Action = -1;
-        ReadI32(Prompt + kActionInPrompt, &Action);
         if (g_lastOpenedPrompt.exchange(Prompt) != Prompt) {
-            LOG_INFO("[TALK] prompt %p (action %d, %s): asked as a host instead of phantom id %u, %s -> %s",
+            int32_t Action = -1;
+            ReadI32(Prompt + kActionInPrompt, &Action);
+            uint8_t Bytes[3] = { 0, 0, 0 };
+            ReadPromptFlags(Flags, Bytes);
+            LOG_INFO("[TALK] prompt %p (action %d, %s, flags %02X %02X %02X): phantom id %u%s, %s -> %s",
                      reinterpret_cast<void*>(Prompt), Action,
                      Action == kActionTalk ? "talk" : "something else",
-                     static_cast<unsigned>(Saved),
-                     IsGuestInHostWorld() ? "in the host's world" : "while the join settles",
-                     (Answer & 0xFF) ? "yes" : "still no");
+                     Bytes[0], Bytes[1], Bytes[2], static_cast<unsigned>(Saved),
+                     Swapped ? " (asked as a host instead)" : (g_talkEnabled.load() ? "" : " (npc_talk=false)"),
+                     IsGuestInHostWorld() ? "in the host's world" : "not in a host's world yet",
+                     (Answer & 0xFF) ? "yes" : "no");
         }
     }
     return Answer;

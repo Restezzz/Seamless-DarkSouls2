@@ -242,10 +242,12 @@ bool PartnerBossFight() {
            g_partnerBossActive.load() > 0 && g_partnerBossPhase.load() == 1;
 }
 
-// A boss fight is on for this player: its own, or -- a guest in the host's
-// world -- the host's.
+// A boss fight is on for this player: a host's own, or -- for a guest in the
+// host's world -- the host's, as the host reports it. Never the guest's own copy
+// of the battle: on 16.09 evening that copy stayed in phase 1 after the boss had
+// died on both machines, and a hold keyed to it would never have been released.
 bool BossFightOn(int Join) {
-    return InBossFight() || (Join == kJoinInWorld && PartnerBossFight());
+    return Join == kJoinInWorld ? PartnerBossFight() : InBossFight();
 }
 
 // The EventResult now in charge ([[[GMImp+0x70]+0x78]+0x10]); a new one is made
@@ -445,7 +447,10 @@ void __fastcall PhantomBranchDetour(void* Result, int Reason) {
     const bool OwnDeath = IsDead(Hp);
     const bool Guest    = Join == kJoinInWorld;
     const bool HostBoss = Guest && PartnerBossFight();
-    const bool InBoss   = (BossActive > 0 && BossPhase == 1) || HostBoss;
+    // A guest goes by the host's fight alone -- see BossFightOn: its own copy of
+    // the battle can sit in phase 1 after the boss is dead, and on 16.09 evening
+    // that turned a won fight into "your partner fell, the fight goes on".
+    const bool InBoss   = Guest ? HostBoss : (BossActive > 0 && BossPhase == 1);
     const bool Partner  = g_partnerAlive.load();
 
     // The boss is dead and this guest is on its feet: reason 1 is the game's "duty
@@ -797,15 +802,21 @@ void* __fastcall ResultSeqDetour(void* Result, void* Out, void* Arg3, const int*
     // Only when the mod really is going to hold, because anywhere else the
     // message is true. The predicate is the one PhantomBranchDetour uses for the
     // same decision -- both run on the same death, so they see the same state.
+    //
+    // And only for a death. Row byte 3 is the reason the phantom branch will get
+    // (logs of 12.09-16.09: code 1 "you died" -> 2, code 4 "the host died" -> 3,
+    // code 3 "duty fulfilled" -> 1). On 16.09 evening a won boss fight had its
+    // message taken away because the guest's stale battle copy still read as a
+    // fight; the boss being dead is exactly what that message says.
     uint8_t Copy[24];
     const uint8_t* Use = Row;
-    if (Row && Row[1]) {
+    if (Row && Row[1] && (Row[3] == 2 || Row[3] == 3)) {
         const int     Join = ReadJoinState();
         const int32_t Hp   = ReadLocalHp();
         int32_t BossActive = 0, BossPhase = 0;
         ReadBoss(&BossActive, &BossPhase);
         const bool Guest    = Join == kJoinInWorld;
-        const bool InBoss   = (BossActive > 0 && BossPhase == 1) || (Guest && PartnerBossFight());
+        const bool InBoss   = Guest ? PartnerBossFight() : (BossActive > 0 && BossPhase == 1);
         const bool OwnDeath = IsDead(Hp);
         const bool HoldBack = g_enabled.load() && Guest && InBoss &&
                               (OwnDeath ? g_partnerAlive.load() : IsAlive(Hp));

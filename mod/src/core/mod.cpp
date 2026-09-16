@@ -19,6 +19,7 @@
 #include "../../include/ui_settings.h"
 #include <fstream>
 #include <chrono>
+#include <cstdlib>
 #include <utility>
 
 using namespace DS2Coop;
@@ -311,6 +312,16 @@ void SeamlessCoopMod::LoadConfig() {
 
     m_config = ModConfig{};
 
+    // A file this version wrote carries config_version; one without it and with
+    // npc_talk=false was written by an older build, from the days when talking to
+    // NPCs as a guest was off by default -- 16.09 evening one player could talk to
+    // no one for exactly that reason. Such a file is moved to the new default once
+    // and saved again. Hand-edited templates (they have no npc_talk line) are left
+    // alone, comments and all.
+    constexpr int kConfigVersion = 2;
+    int  fileVersion = 0;
+    bool talkWrittenOff = false;
+
     std::ifstream configFile("ds2_seamless_coop.ini");
     if (configFile.is_open()) {
         std::string line;
@@ -358,6 +369,9 @@ void SeamlessCoopMod::LoadConfig() {
                     m_config.boss_sync = (value == "true" || value == "1");
                 } else if (key == "npc_talk") {
                     m_config.npc_talk = (value == "true" || value == "1");
+                    talkWrittenOff = !m_config.npc_talk;
+                } else if (key == "config_version") {
+                    fileVersion = std::atoi(value.c_str());
                 } else if (key == "npc_solid") {
                     m_config.npc_solid = (value == "true" || value == "1");
                 } else if (key == "debug_hotkeys") {
@@ -385,6 +399,13 @@ void SeamlessCoopMod::LoadConfig() {
         }
         configFile.close();
         LOG_INFO("Configuration loaded from file");
+        if (fileVersion < kConfigVersion && talkWrittenOff) {
+            m_config.npc_talk = true;
+            LOG_INFO("[CONFIG] npc_talk=false came from an older version's file, when a guest could not talk to NPCs "
+                     "by default -- switched to the current default (true) and the file saved as version %d",
+                     kConfigVersion);
+            SaveConfig();
+        }
     } else {
         LOG_INFO("No configuration file found, using defaults");
         SaveConfig();
@@ -399,6 +420,7 @@ void SeamlessCoopMod::SaveConfig() {
     std::ofstream configFile("ds2_seamless_coop.ini");
     if (configFile.is_open()) {
         configFile << "# Dark Souls 2 Seamless Co-op Configuration\n\n";
+        configFile << "config_version=2\n";
         configFile << "enabled=true\n";
         configFile << "debug_logging=" << (m_config.debug_logging ? "true" : "false") << "\n";
         configFile << "max_players=" << m_config.max_players << "\n";
