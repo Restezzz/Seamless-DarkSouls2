@@ -1,8 +1,14 @@
-// Draws the overlay offscreen at 1920x1080 over a stand-in game scene and saves
-// each state as a BMP, so the menu can be looked at without starting the game.
-// Every scene comes out in English and in Russian (en_*.bmp, ru_*.bmp); these
-// are the README screenshots. Nothing real is shown: the host page keeps its
-// addresses hidden and the players are made up.
+// Draws the overlay offscreen over a stand-in game scene and saves each state as
+// a BMP, so the menu can be looked at without starting the game. Every scene
+// comes out in English and in Russian (en_*.bmp, ru_*.bmp); at the default
+// 1920x1080 these are the README screenshots. Nothing real is shown: the host
+// page keeps its addresses hidden and the players are made up.
+//
+//   ui_preview [width height [menu size %% [file prefix]]]
+//
+// Like the game, it starts at 1280x720 and then switches to the chosen size, so
+// the fonts are built twice the way renderer.cpp builds them. Each scene prints
+// the menu's height, which is where Kit::kMenuTallest comes from.
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -33,7 +39,8 @@ using namespace DS2Coop::UI;
 
 namespace {
 
-constexpr int kW = 1920, kH = 1080;
+int g_w = 1920, g_h = 1080;
+std::string g_prefix;
 constexpr const char* kLanguages[] = { "en", "ru" };
 ID3D11Device*           g_dev = nullptr;
 ID3D11DeviceContext*    g_ctx = nullptr;
@@ -42,23 +49,25 @@ ID3D11RenderTargetView* g_rtv = nullptr;
 
 void DrawFakeGame() {
     ImDrawList* L = ImGui::GetBackgroundDrawList();
-    L->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(kW, kH * 0.62f), IM_COL32(40, 46, 58, 255),
+    const float W = static_cast<float>(g_w), H = static_cast<float>(g_h);
+    const float X = W / 1920.0f, Y = H / 1080.0f;
+    L->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(W, H * 0.62f), IM_COL32(40, 46, 58, 255),
                                IM_COL32(40, 46, 58, 255), IM_COL32(118, 100, 80, 255), IM_COL32(118, 100, 80, 255));
-    L->AddRectFilledMultiColor(ImVec2(0, kH * 0.62f), ImVec2(kW, kH), IM_COL32(64, 56, 44, 255),
+    L->AddRectFilledMultiColor(ImVec2(0, H * 0.62f), ImVec2(W, H), IM_COL32(64, 56, 44, 255),
                                IM_COL32(64, 56, 44, 255), IM_COL32(24, 21, 18, 255), IM_COL32(24, 21, 18, 255));
     for (int i = 0; i < 6; i++)
-        L->AddCircleFilled(ImVec2(kW * 0.28f, kH * 0.72f), 260.0f - i * 40.0f, IM_COL32(255, 150, 60, 14));
-    L->AddRectFilled(ImVec2(1300, 380), ImVec2(1420, 820), IM_COL32(30, 28, 26, 255));   // a pillar
+        L->AddCircleFilled(ImVec2(W * 0.28f, H * 0.72f), (260.0f - i * 40.0f) * Y, IM_COL32(255, 150, 60, 14));
+    L->AddRectFilled(ImVec2(1300 * X, 380 * Y), ImVec2(1420 * X, 820 * Y), IM_COL32(30, 28, 26, 255));   // a pillar
     // The game's HUD, to see what the overlay sits next to.
-    L->AddRectFilled(ImVec2(70, 52), ImVec2(520, 64), IM_COL32(160, 36, 36, 255));
-    L->AddRectFilled(ImVec2(70, 72), ImVec2(400, 80), IM_COL32(52, 140, 60, 255));
-    L->AddText(ImVec2(1720, 1010), IM_COL32(230, 220, 200, 255), "Souls 12345");
+    L->AddRectFilled(ImVec2(70 * X, 52 * Y), ImVec2(520 * X, 64 * Y), IM_COL32(160, 36, 36, 255));
+    L->AddRectFilled(ImVec2(70 * X, 72 * Y), ImVec2(400 * X, 80 * Y), IM_COL32(52, 140, 60, 255));
+    L->AddText(ImVec2(W - 200 * X, H - 70 * Y), IM_COL32(230, 220, 200, 255), "Souls 12345");
 }
 
 void Frame() {
     ImGuiIO& io = ImGui::GetIO();
     io.DeltaTime = 1.0f / 60.0f;
-    io.DisplaySize = ImVec2(static_cast<float>(kW), static_cast<float>(kH));
+    io.DisplaySize = ImVec2(static_cast<float>(g_w), static_cast<float>(g_h));
     ImGui_ImplDX11_NewFrame();
     ImGui::NewFrame();
     DrawFakeGame();
@@ -84,19 +93,19 @@ void Save(const std::string& name) {
     D3D11_MAPPED_SUBRESOURCE Map{};
     g_ctx->Map(Staging, 0, D3D11_MAP_READ, 0, &Map);
 
-    const std::string Path = name + ".bmp";
+    const std::string Path = g_prefix + name + ".bmp";
     FILE* F = std::fopen(Path.c_str(), "wb");
     BITMAPFILEHEADER Fh{};
     BITMAPINFOHEADER Ih{};
-    Ih.biSize = sizeof(Ih); Ih.biWidth = kW; Ih.biHeight = -kH; Ih.biPlanes = 1;
-    Ih.biBitCount = 32; Ih.biCompression = BI_RGB; Ih.biSizeImage = kW * kH * 4;
+    Ih.biSize = sizeof(Ih); Ih.biWidth = g_w; Ih.biHeight = -g_h; Ih.biPlanes = 1;
+    Ih.biBitCount = 32; Ih.biCompression = BI_RGB; Ih.biSizeImage = g_w * g_h * 4;
     Fh.bfType = 0x4D42; Fh.bfOffBits = sizeof(Fh) + sizeof(Ih); Fh.bfSize = Fh.bfOffBits + Ih.biSizeImage;
     std::fwrite(&Fh, sizeof(Fh), 1, F);
     std::fwrite(&Ih, sizeof(Ih), 1, F);
-    std::vector<uint8_t> Row(kW * 4);
-    for (int y = 0; y < kH; y++) {
+    std::vector<uint8_t> Row(g_w * 4);
+    for (int y = 0; y < g_h; y++) {
         const uint8_t* Src = static_cast<const uint8_t*>(Map.pData) + y * Map.RowPitch;
-        for (int x = 0; x < kW; x++) {
+        for (int x = 0; x < g_w; x++) {
             Row[x * 4 + 0] = Src[x * 4 + 2];
             Row[x * 4 + 1] = Src[x * 4 + 1];
             Row[x * 4 + 2] = Src[x * 4 + 0];
@@ -110,12 +119,26 @@ void Save(const std::string& name) {
     std::printf("saved %s\n", Path.c_str());
 }
 
+void MakeTarget() {
+    if (g_rtv) { g_rtv->Release(); g_rtv = nullptr; }
+    if (g_tex) { g_tex->Release(); g_tex = nullptr; }
+    D3D11_TEXTURE2D_DESC Td{};
+    Td.Width = g_w; Td.Height = g_h; Td.MipLevels = 1; Td.ArraySize = 1;
+    Td.Format = DXGI_FORMAT_R8G8B8A8_UNORM; Td.SampleDesc.Count = 1;
+    Td.Usage = D3D11_USAGE_DEFAULT; Td.BindFlags = D3D11_BIND_RENDER_TARGET;
+    g_dev->CreateTexture2D(&Td, nullptr, &g_tex);
+    g_dev->CreateRenderTargetView(g_tex, nullptr, &g_rtv);
+}
+
 // The current state, once per language.
 void Shoot(const char* scene, int frames) {
+    const Overlay& O = Overlay::GetInstance();
     for (const char* Lang : kLanguages) {
-        InitUiSettings(Lang, "F1");
+        InitUiSettings(Lang, "F1", GetMenuSize());
         Run(frames);
         Save(std::string(Lang) + "_" + scene);
+        std::printf("  %s %s: menu %.0f px high (content %.0f), %.0f at scale 1; scale %.2f\n", Lang, scene,
+                    O.m_menuHeight, O.m_menuContent, O.m_menuContent / Kit::Scale(), Kit::Scale());
     }
 }
 
@@ -126,7 +149,19 @@ void ClearNotifications(Overlay& o) {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    int Width = 1920, Height = 1080, MenuSize = 100;
+    if (argc >= 3) {
+        Width = std::atoi(argv[1]);
+        Height = std::atoi(argv[2]);
+    }
+    if (argc >= 4) MenuSize = std::atoi(argv[3]);
+    if (argc >= 5) g_prefix = argv[4];
+    if (Width < 320 || Height < 240) {
+        std::printf("usage: ui_preview [width height [menu size %% [file prefix]]]\n");
+        return 1;
+    }
+
     WSADATA Wsa;
     WSAStartup(MAKEWORD(2, 2), &Wsa);
 
@@ -138,24 +173,34 @@ int main() {
         std::printf("no D3D11 device\n");
         return 1;
     }
-    D3D11_TEXTURE2D_DESC Td{};
-    Td.Width = kW; Td.Height = kH; Td.MipLevels = 1; Td.ArraySize = 1;
-    Td.Format = DXGI_FORMAT_R8G8B8A8_UNORM; Td.SampleDesc.Count = 1;
-    Td.Usage = D3D11_USAGE_DEFAULT; Td.BindFlags = D3D11_BIND_RENDER_TARGET;
-    g_dev->CreateTexture2D(&Td, nullptr, &g_tex);
-    g_dev->CreateRenderTargetView(g_tex, nullptr, &g_rtv);
 
+    // First frames at 1280x720, as the game often shows them.
+    g_w = 1280;
+    g_h = 720;
+    MakeTarget();
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    Kit::Setup(static_cast<float>(kH));
+    InitUiSettings("en", "F1", MenuSize);
+    Kit::Setup(static_cast<float>(g_w), static_cast<float>(g_h));
     ImGui_ImplDX11_Init(g_dev, g_ctx);
 
     Overlay& O = Overlay::GetInstance();
-
-    // The menu, not in a lobby yet.
-    InitUiSettings("en", "F1");
     PreviewSetSession(0);
     O.SetVisible(true);
+    Run(10);
+    std::printf("started at %dx%d: scale %.2f\n", g_w, g_h, Kit::Scale());
+
+    // Then the real size, rebuilt between frames the way renderer.cpp does it.
+    g_w = Width;
+    g_h = Height;
+    MakeTarget();
+    if (Kit::TargetScale(static_cast<float>(g_w), static_cast<float>(g_h)) != Kit::Scale()) {
+        ImGui_ImplDX11_InvalidateDeviceObjects();
+        Kit::Setup(static_cast<float>(g_w), static_cast<float>(g_h));
+    }
+    std::printf("now %dx%d, menu size %d%%: scale %.2f\n", g_w, g_h, GetMenuSize(), Kit::Scale());
+
+    // The menu, not in a lobby yet.
     Run(60);   // let the window fade in
     Shoot("home", 5);
 

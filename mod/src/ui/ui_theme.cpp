@@ -4,15 +4,23 @@
 // Windows' own Segoe UI for text and Palatino Linotype for the title, both of
 // which carry Cyrillic. They are loaded from the Windows font folder, sized for
 // the screen, with the next font in each list as a fallback.
+//
+// The size is not settled once: the game often shows its first frames at
+// 1280x720 and only then switches to the real resolution, which left the menu
+// drawn for 720p on a 1440p screen. The renderer calls Setup again whenever the
+// back buffer settles at a size that wants another scale, or the player picks
+// another menu size.
 
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include "../../include/ui_kit.h"
+#include "../../include/ui_settings.h"
 #include "../../include/utils.h"
 
 #include <Windows.h>
 #include <algorithm>
+#include <cmath>
 #include <initializer_list>
 #include <string>
 
@@ -139,16 +147,31 @@ float Approach(float value, float target, float perSecond) {
     return value < target ? std::min(value + Step, target) : std::max(value - Step, target);
 }
 
-void Setup(float displayHeight) {
-    g_scale = std::clamp(displayHeight / 1080.0f, 0.85f, 2.0f);
+float TargetScale(float displayWidth, float displayHeight) {
+    if (displayWidth < 1.0f || displayHeight < 1.0f) return g_scale;
+    const float Screen = std::clamp(displayHeight / 1080.0f, 0.85f, 3.0f);
+    float Wanted = Screen * static_cast<float>(GetMenuSize()) / 100.0f;
+    Wanted = std::min(Wanted, displayWidth * 0.92f / kMenuWidth);
+    if (kMenuTallest > 0.0f) Wanted = std::min(Wanted, displayHeight * 0.94f / kMenuTallest);
+    Wanted = std::clamp(Wanted, 0.6f, 4.0f);
+    return std::round(Wanted * 20.0f) / 20.0f;
+}
+
+void Setup(float displayWidth, float displayHeight) {
+    g_scale = TargetScale(displayWidth, displayHeight);
     const float S = g_scale;
+
+    // Fonts built for the previous scale go; ImFont pointers are only ever
+    // asked for through the accessors below, never kept across frames.
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Clear();
+    g_body = g_small = g_strong = g_title = nullptr;
 
     g_body   = LoadFirst({ "segoeui.ttf", "arial.ttf" }, 17.0f * S, 1.0f);
     g_small  = LoadFirst({ "segoeui.ttf", "arial.ttf" }, 14.0f * S, 1.1f);
     g_strong = LoadFirst({ "seguisb.ttf", "segoeuib.ttf", "arialbd.ttf" }, 17.0f * S, 1.0f);
     g_title  = LoadFirst({ "palab.ttf", "georgiab.ttf", "timesbd.ttf" }, 25.0f * S, 1.0f);
 
-    ImGuiIO& io = ImGui::GetIO();
     if (!g_body) {
         LOG_WARNING("[UI] no system font found; Cyrillic will not display");
         g_body = io.Fonts->AddFontDefault();

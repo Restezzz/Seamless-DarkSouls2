@@ -2,9 +2,10 @@
 
 #include <string>
 
-// Interface preferences: the menu language and the key that opens the menu.
+// Interface preferences: the menu language, the key that opens the menu, and
+// how large the overlay is drawn.
 //
-// Both are read from the ini at startup, changed from the menu, and written
+// All are read from the ini at startup, changed from the menu, and written
 // back at once. Every place that shows the key asks KeyName(GetMenuKey()), so a
 // rebind shows up in the hint, the notifications, the menu and the window title
 // alike.
@@ -13,12 +14,18 @@ namespace DS2Coop::UI {
 enum class Language { English, Russian };
 
 // language: "auto" (follow Windows), "en" or "ru". menuKey: a key name, "F1".
-void InitUiSettings(const std::string& language, const std::string& menuKey);
+// menuSize: percent of the size the screen suggests, 100 by default.
+void InitUiSettings(const std::string& language, const std::string& menuKey, int menuSize = 100);
 
 Language GetLanguage();
 void     SetLanguage(Language lang);   // saves the ini
 int      GetMenuKey();                 // virtual-key code
 void     SetMenuKey(int vk);           // saves the ini
+int      GetMenuSize();                // percent, kMinMenuSize..kMaxMenuSize
+void     SetMenuSize(int percent);     // saves the ini; the overlay rebuilds on the next frame
+
+constexpr int kMinMenuSize = 50;
+constexpr int kMaxMenuSize = 200;
 
 // The string for the current language. Both arguments are UTF-8.
 inline const char* Tr(const char* en, const char* ru) {

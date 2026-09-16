@@ -20,6 +20,8 @@
 #include "../../include/utils.h"
 #include "../../include/pattern_scanner.h"
 #include "../../include/address_resolver.h"
+#include "../../include/ui.h"
+#include "../../include/ui_settings.h"
 #include "MinHook.h"
 #include <typeinfo>
 #include <string>
@@ -44,6 +46,52 @@ static std::atomic<uint32_t> g_totalCount{0};
 static std::vector<std::string> g_sessionSteamIds;
 static std::mutex g_steamIdMutex;
 static std::string g_localSteamId;
+
+// ============================================================================
+// Is the game still hearing from the server?
+//
+// 17.09, 00:28-00:41: a friend's game went on sending -- its signs reached the
+// server, and the host saw and summoned them -- but after 00:28:46 got nothing
+// back: not the answer to its own sign, not the summon, not one sign list. The
+// game said nothing about it, and six joins in a row simply never happened. A
+// sign or a sign list is answered at once while the line is alive (106 of 110
+// signs and 1117 of 1120 lists in one long log), so a request followed by 25 s
+// without a single message from the server names the stall, on screen.
+// ============================================================================
+static constexpr ULONGLONG kServerSilentMs = 25000;
+static std::atomic<ULONGLONG> g_replyAwaitedSince{ 0 };   // the first request since the server last spoke
+static std::atomic<bool>      g_serverSilentWarned{ false };
+
+static void NoteRequestAwaitingReply() {
+    ULONGLONG Expected = 0;
+    g_replyAwaitedSince.compare_exchange_strong(Expected, GetTickCount64());
+}
+
+static void NoteServerMessage() {
+    const ULONGLONG Since = g_replyAwaitedSince.exchange(0);
+    if (!g_serverSilentWarned.exchange(false)) return;
+    LOG_INFO("[NET] the server answers again, %llu s after the unanswered request",
+             static_cast<unsigned long long>(Since ? (GetTickCount64() - Since) / 1000 : 0));
+    DS2Coop::UI::Overlay::GetInstance().ShowNotification(
+        DS2Coop::UI::Tr("The server answers again.", "Связь с сервером восстановилась."),
+        4.0f, DS2Coop::UI::NotifyKind::Success);
+}
+
+namespace DS2Coop::Hooks {
+void ServerWatchTick() {
+    const ULONGLONG Since = g_replyAwaitedSince.load();
+    if (!Since || g_serverSilentWarned.load()) return;
+    const ULONGLONG Now = GetTickCount64();
+    if (Now < Since + kServerSilentMs || g_serverSilentWarned.exchange(true)) return;
+    LOG_WARNING("[NET] no message from the server for %llu s after a request it always answers -- the game's "
+                "line to the server has stalled; signs and summons cannot work until it is back",
+                static_cast<unsigned long long>((Now - Since) / 1000));
+    DS2Coop::UI::Overlay::GetInstance().ShowNotification(
+        DS2Coop::UI::Tr("The game gets no answer from the server, so no summon can work. Restart the game.",
+                        "Игра не получает ответов от сервера \xE2\x80\x94 призыв не сработает. Перезапусти игру."),
+        10.0f, DS2Coop::UI::NotifyKind::Warning);
+}
+}
 
 // ============================================================================
 // Get local Steam ID from steam_api64.dll
@@ -580,6 +628,7 @@ static uint8_t* __fastcall SerializeHook(void* thisPtr, uint8_t* target) {
         const size_t len = (end > target) ? static_cast<size_t>(end - target) : 0;
         NoteAreaFromSignListRequest(target, len);
         g_signListRequests.fetch_add(1);
+        NoteRequestAwaitingReply();
 
         // Where summoning is not allowed the game asks for no areas at all, so
         // the request is a stub and no sign can come back. Whatever decides that
@@ -630,6 +679,7 @@ static uint8_t* __fastcall SerializeHook(void* thisPtr, uint8_t* target) {
 
         AimSignAtOtherPlayer(target, len);
         DS2Coop::Hooks::NoteSignCreate();
+        NoteRequestAwaitingReply();
 
         // Tell the other player straight away. Their client polls for signs on
         // its own schedule, which is about a minute, and that minute is the
@@ -727,9 +777,14 @@ uint32_t GetSignListResponseCount() { return g_signListResponses.load(); }
 
 static std::atomic<uint32_t> g_signCreates{ 0 };
 static std::atomic<uint32_t> g_summonRequests{ 0 };
+static std::atomic<ULONGLONG> g_lastSignCreateAt{ 0 };
 uint32_t GetSignCreateCount() { return g_signCreates.load(); }
 uint32_t GetSummonRequestCount() { return g_summonRequests.load(); }
-void NoteSignCreate() { g_signCreates.fetch_add(1); }
+ULONGLONG GetLastSignCreateTime() { return g_lastSignCreateAt.load(); }
+void NoteSignCreate() {
+    g_signCreates.fetch_add(1);
+    g_lastSignCreateAt.store(GetTickCount64());
+}
 void NoteSummonRequest() { g_summonRequests.fetch_add(1); }
 }
 
@@ -1033,6 +1088,9 @@ static bool __fastcall ParseHook(void* thisPtr, void* data, int size) {
 
     if (result) {
         const char* className = GetRttiClassName(thisPtr);
+
+        // Anything the server itself sends counts as the line being alive.
+        if (strstr(className, "@Frpg2RequestMessage@@")) NoteServerMessage();
 
         // Log ALL session-related incoming messages (INFO level for debugging)
         if (strstr(className, "Session") || strstr(className, "Guest") ||

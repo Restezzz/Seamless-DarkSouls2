@@ -8,8 +8,15 @@
 //
 // Direction: a bonfire at night. Warm charcoal panels, parchment text, thin gold
 // lines, and one ember accent reserved for the thing to press. Everything scales
-// with the screen height (1.0 at 1080p).
+// with the screen height (1.0 at 1080p) and the menu size the player picked.
 namespace DS2Coop::UI::Kit {
+
+// The menu window's width at scale 1, and about its tallest page: the host's
+// lobby page in Russian measures 614 px with two players, the settings page 601
+// (tools/ui_preview, 17.09). The scale never grows past what lets both fit on
+// the screen; a page taller still scrolls.
+constexpr float kMenuWidth   = 500.0f;
+constexpr float kMenuTallest = 640.0f;
 
 // ---- palette ---------------------------------------------------------------
 namespace Col {
@@ -35,7 +42,14 @@ float EaseOut(float t);                        // cubic ease-out, t = 0..1
 float Approach(float value, float target, float perSecond);
 
 // ---- fonts and style --------------------------------------------------------
-void  Setup(float displayHeight);              // once, after ImGui::CreateContext
+// The scale for a screen of this size: its height against 1080p, times the menu
+// size from the settings, no larger than fits, in steps of 0.05 so a window
+// dragged by a few pixels changes nothing.
+float TargetScale(float displayWidth, float displayHeight);
+// Builds the fonts and the style at TargetScale. The first call comes after
+// ImGui::CreateContext; a later call rebuilds the font atlas, so it has to come
+// between frames, with the renderer's font texture released.
+void  Setup(float displayWidth, float displayHeight);
 float Scale();
 ImFont* FontBody();
 ImFont* FontSmall();

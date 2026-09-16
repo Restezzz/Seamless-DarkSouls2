@@ -1,7 +1,8 @@
 // In-game co-op menu.
 //
 // One window, two tabs. "Lobby": host or join, and once in a lobby the players
-// and the way out. "Settings": the language and the key that opens all this.
+// and the way out. "Settings": the language, the menu size and the key that
+// opens all this.
 // The window fades and rises in, dims the game a little behind it, and is drawn
 // with the widgets in ui_kit.h. The hint and notifications live in
 // overlay_hud.cpp.
@@ -31,6 +32,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -250,15 +252,28 @@ void Overlay::RenderMenu() {
     ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), io.DisplaySize,
                                                   IM_COL32(0, 0, 0, static_cast<int>(90.0f * Ease)));
 
-    // Anchored by the top edge, so switching pages does not make it jump.
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.15f + (1.0f - Ease) * 14.0f * S),
+    // Anchored by the top edge, so switching pages does not make it jump -- unless
+    // the page would run off the bottom of the screen: then it moves up, and a page
+    // taller than the whole screen scrolls.
+    const float Margin = 12.0f * S;
+    const float MaxH = std::max(io.DisplaySize.y - Margin * 2.0f, 120.0f * S);
+    float Top = io.DisplaySize.y * 0.15f;
+    if (Top + m_menuHeight > io.DisplaySize.y - Margin) {
+        Top = std::max(Margin, io.DisplaySize.y - Margin - m_menuHeight);
+    }
+    const float Width = std::max(std::min(Kit::kMenuWidth * S, io.DisplaySize.x - Margin * 2.0f), 100.0f);
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, Top + (1.0f - Ease) * 14.0f * S),
                             ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-    ImGui::SetNextWindowSize(ImVec2(500.0f * S, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(Width, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(Width, 0.0f), ImVec2(Width, MaxH));
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, Ease);
 
     ImGuiWindowFlags Flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-                             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings;
+                             ImGuiWindowFlags_NoSavedSettings;
+    // No scrollbar while the page fits: an auto-sized window lags its content by a
+    // frame, and a bar flickering in on every page switch would shift the layout.
+    if (m_menuContent <= MaxH) Flags |= ImGuiWindowFlags_NoScrollbar;
     if (!m_visible) Flags |= ImGuiWindowFlags_NoInputs;
 
     if (ImGui::Begin("##seamless_menu", nullptr, Flags)) {
@@ -289,6 +304,10 @@ void Overlay::RenderMenu() {
         }
 
         RenderFooter();
+
+        const ImGuiStyle& Style = ImGui::GetStyle();
+        m_menuContent = ImGui::GetCursorPosY() - Style.ItemSpacing.y + Style.WindowPadding.y;
+        m_menuHeight = ImGui::GetWindowHeight();
     }
     ImGui::End();
     ImGui::PopStyleVar();
@@ -585,6 +604,26 @@ void Overlay::RenderSettingsPage() {
         bool Russian = GetLanguage() == Language::Russian;
         if (Kit::LanguageSwitch("lang", Russian)) SetLanguage(Russian ? Language::Russian : Language::English);
         EndRow(P);
+    }
+    Kit::Divider();
+
+    // Menu size: 100% is what suits the screen; the whole overlay follows the
+    // choice from the next frame (renderer.cpp builds the fonts again).
+    {
+        const ImVec2 P = ImGui::GetCursorScreenPos();
+        RowText(P, Tr("Menu size", "Размер меню"),
+                Tr("Follows the screen; make it larger or smaller here",
+                   "Подстраивается под экран; здесь можно крупнее или мельче"));
+        EndRow(P);
+        static constexpr int kSizes[] = { 85, 100, 115, 130, 150 };
+        static constexpr const char* kLabels[] = { "85%", "100%", "115%", "130%", "150%" };
+        constexpr int kCount = static_cast<int>(sizeof(kSizes) / sizeof(kSizes[0]));
+        int Current = 0;
+        for (int I = 1; I < kCount; I++) {
+            if (std::abs(kSizes[I] - GetMenuSize()) < std::abs(kSizes[Current] - GetMenuSize())) Current = I;
+        }
+        if (Kit::Tabs("menu_size", kLabels, kCount, Current)) SetMenuSize(kSizes[Current]);
+        ImGui::Dummy(ImVec2(0.0f, 4.0f * S));
     }
     Kit::Divider();
 

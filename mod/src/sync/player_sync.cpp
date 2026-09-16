@@ -285,9 +285,49 @@ void LogProbe(int Index, void* Caller, uint64_t Result, void* Arg1, void* Arg2) 
              (unsigned long long)Result);
 }
 
+// A guest's own sign, touched while it waits to be summoned.
+//
+// The sign goes down where the host stands, and when both players stand on the
+// same spot of their own worlds that is under the guest's own feet. The game
+// then offers the guest "summon" on it, and going through with it withdraws the
+// sign: exe+0x210B00 takes the id and a second later RequestRemoveSign goes out,
+// so the host has nothing left to summon. 17.09, 00:29-00:31, three joins in a
+// row ended that way. This player's own sign carries 0x6 in the top nibble of
+// its id (0x60000001, 0x60000011, 0x60000021 as they were put down); signs from
+// other players carry 0x8 (0x80000011 for the joiner's sign at the host).
+// Answering 0 is the path exe+0x210B00 takes itself for a sign it does not know.
+//
+// 0x6 is only known from this player's own signs; whether other local signs (an
+// NPC's) share it is not. So the refusal holds only while a sign of this
+// player's is fresh -- five minutes after the last RequestCreateSign, which is
+// how long a join waits -- and any sign is touchable again after that.
+constexpr ULONGLONG kOwnSignFreshMs = 5 * 60 * 1000;
+
+bool RefuseOwnSignTouch(void* IdPtr) {
+    auto& Lobby = DS2Coop::Session::SessionManager::GetInstance();
+    if (!Lobby.IsActive() || Lobby.IsHost() || !IdPtr) return false;
+    const ULONGLONG Now = GetTickCount64();
+    const ULONGLONG Placed = DS2Coop::Hooks::GetLastSignCreateTime();
+    if (!Placed || Now - Placed > kOwnSignFreshMs) return false;
+    uint32_t Id = 0;
+    if (!Memory::Read<uint32_t>(reinterpret_cast<uintptr_t>(IdPtr), &Id) || (Id >> 28) != 0x6) return false;
+
+    static std::atomic<ULONGLONG> LastToast{ 0 };
+    if (Now - LastToast.load() > 5000) {
+        LastToast.store(Now);
+        DS2Coop::UI::Overlay::GetInstance().ShowNotification(
+            DS2Coop::UI::Tr("That is your own sign -- the host summons you, nothing to press.",
+                            "Это твой знак \xE2\x80\x94 хост призовёт тебя сам, нажимать ничего не нужно."),
+            5.0f, DS2Coop::UI::NotifyKind::Info);
+    }
+    LOG_INFO("[SUMMON] own sign 0x%08X touched as a guest -- left alone, the host summons it", Id);
+    return true;
+}
+
 template <int N>
 uint64_t __fastcall ProbeDetour(void* a1, void* a2, void* a3, void* a4) {
     void* Caller = _ReturnAddress();
+    if (g_probes[N].Rva == 0x210B00 && RefuseOwnSignTouch(a2)) return 0;
     auto Fn = reinterpret_cast<uint64_t(__fastcall*)(void*, void*, void*, void*)>(g_probes[N].Original);
     const uint64_t Result = Fn(a1, a2, a3, a4);
     LogProbe(N, Caller, Result, a1, a2);
@@ -2185,9 +2225,21 @@ void LogPollGate(void* Manager) {
         Memory::Read<uint8_t>(M + 0xF0, &Active);
         Memory::Read<uint8_t>(M + 0x208, &OtherBranch);
 
-        LOG_INFO("[POLLGATE] service %d, game state %d (needs 30), task9 %s, task8 %s, "
+        // Why service 8 is down, when it is: the capability object [netRoot+0x38]
+        // keeps a mode at +8 (0-6, each with its own mask of what is allowed) and a
+        // block counter per capability at +0x10+4n (docs §1.2). 17.09 a host's
+        // game sat at "service 0" for twelve minutes and polled no sign at all.
+        uintptr_t Root = 0, Caps = 0;
+        int CapsMode = -1, Blocks8 = -1;
+        if (Memory::Read<uintptr_t>(ExeBase + 0x1616CF8, &Root) && Root &&
+            Memory::Read<uintptr_t>(Root + 0x38, &Caps) && Caps) {
+            Memory::Read<int>(Caps + 0x08, &CapsMode);
+            Memory::Read<int>(Caps + 0x10 + 4 * 8, &Blocks8);
+        }
+
+        LOG_INFO("[POLLGATE] service %d (mode %d, blocks %d), game state %d (needs 30), task9 %s, task8 %s, "
                  "cell %08X vs stored %08X, manager on %u, +0x208 %u",
-                 ServiceUp ? 1 : 0, GameState, Task9 ? "running" : "gone",
+                 ServiceUp ? 1 : 0, CapsMode, Blocks8, GameState, Task9 ? "running" : "gone",
                  Task8 ? "running" : "gone", Live, Stored, Active, OtherBranch);
     } __except(EXCEPTION_EXECUTE_HANDLER) {
         LOG_ERROR("[POLLGATE] reading the predicate threw");
@@ -2508,6 +2560,7 @@ int ReturnToOwnWorld() {
 
 void __fastcall SignTickDetour(void* Manager, uint32_t Delta) {
     g_signManager.store(Manager);
+    DS2Coop::Hooks::ServerWatchTick();
 
     // Leaving, if asked: retried every half second while the join settles.
     {

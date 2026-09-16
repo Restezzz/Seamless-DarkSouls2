@@ -27,6 +27,7 @@
 #include <Windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
+#include <cmath>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -175,6 +176,39 @@ static HRESULT STDMETHODCALLTYPE HookedResizeBuffers(IDXGISwapChain* swapChain,
 }
 
 // ============================================================================
+// Overlay size — follows the back buffer
+// ============================================================================
+// The game often shows its first frames at 1280x720 and switches to the real
+// resolution a moment later, and a window can be resized at any time. Once the
+// back buffer has held one size for a moment, the fonts and the style are built
+// again if that size (or the menu size the player picked) wants another scale.
+// Always between frames: the font atlas cannot change inside one.
+static constexpr ULONGLONG kSizeSettleMs = 400;
+static UINT      g_seenWidth  = 0;
+static UINT      g_seenHeight = 0;
+static ULONGLONG g_sizeSeenAt = 0;
+
+static void FitOverlayToScreen() {
+    if (!g_rtvWidth || !g_rtvHeight) return;
+    const ULONGLONG Now = GetTickCount64();
+    if (g_rtvWidth != g_seenWidth || g_rtvHeight != g_seenHeight) {
+        g_seenWidth  = g_rtvWidth;
+        g_seenHeight = g_rtvHeight;
+        g_sizeSeenAt = Now;
+    }
+    if (Now - g_sizeSeenAt < kSizeSettleMs) return;
+
+    const float W = static_cast<float>(g_rtvWidth), H = static_cast<float>(g_rtvHeight);
+    const float Old = Kit::Scale();
+    if (std::fabs(Kit::TargetScale(W, H) - Old) < 0.001f) return;
+
+    ImGui_ImplDX11_InvalidateDeviceObjects();   // the font texture; NewFrame builds it again
+    Kit::Setup(W, H);
+    LOG_INFO("[UI] overlay scale %.2f -> %.2f (%ux%u, menu size %d%%)",
+             Old, Kit::Scale(), g_rtvWidth, g_rtvHeight, GetMenuSize());
+}
+
+// ============================================================================
 // Hooked Present
 // ============================================================================
 static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* swapChain, UINT syncInterval, UINT flags) {
@@ -218,7 +252,7 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* swapChain, UINT s
         io.IniFilename = nullptr;
 
         // Fonts with Cyrillic, sized for the screen, and the overlay's style.
-        Kit::Setup(static_cast<float>(g_rtvHeight));
+        Kit::Setup(static_cast<float>(g_rtvWidth), static_cast<float>(g_rtvHeight));
 
         ImGui_ImplWin32_Init(g_hwnd);
         ImGui_ImplDX11_Init(g_device, g_context);
@@ -237,6 +271,7 @@ static HRESULT STDMETHODCALLTYPE HookedPresent(IDXGISwapChain* swapChain, UINT s
     }
 
     // --- Every frame: render ---
+    FitOverlayToScreen();
     auto& overlay = Overlay::GetInstance();
 
     // The menu key is configurable (Settings tab); the overlay polls it.

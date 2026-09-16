@@ -16,6 +16,7 @@ namespace {
 
 std::atomic<int> g_language{ static_cast<int>(Language::English) };
 std::atomic<int> g_menuKey{ VK_F1 };
+std::atomic<int> g_menuSize{ 100 };
 
 Language SystemLanguage() {
     return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_RUSSIAN ? Language::Russian
@@ -50,12 +51,16 @@ bool SameText(const std::string& a, const std::string& b) {
 
 void Save() {
     SeamlessCoopMod::GetInstance().SetUiPreferences(
-        GetLanguage() == Language::Russian ? "ru" : "en", KeyName(GetMenuKey()));
+        GetLanguage() == Language::Russian ? "ru" : "en", KeyName(GetMenuKey()), GetMenuSize());
+}
+
+int ClampMenuSize(int percent) {
+    return percent < kMinMenuSize ? kMinMenuSize : percent > kMaxMenuSize ? kMaxMenuSize : percent;
 }
 
 } // namespace
 
-void InitUiSettings(const std::string& language, const std::string& menuKey) {
+void InitUiSettings(const std::string& language, const std::string& menuKey, int menuSize) {
     Language Lang = SystemLanguage();
     if (SameText(language, "ru")) Lang = Language::Russian;
     else if (SameText(language, "en")) Lang = Language::English;
@@ -65,8 +70,10 @@ void InitUiSettings(const std::string& language, const std::string& menuKey) {
     if (Vk == 0 || WhyNotBindable(Vk) != nullptr) Vk = VK_F1;
     g_menuKey.store(Vk);
 
-    LOG_INFO("[UI] language %s, menu key %s",
-             Lang == Language::Russian ? "ru" : "en", KeyName(Vk).c_str());
+    g_menuSize.store(ClampMenuSize(menuSize));
+
+    LOG_INFO("[UI] language %s, menu key %s, menu size %d%%",
+             Lang == Language::Russian ? "ru" : "en", KeyName(Vk).c_str(), g_menuSize.load());
 }
 
 Language GetLanguage() { return static_cast<Language>(g_language.load()); }
@@ -82,6 +89,14 @@ void SetMenuKey(int vk) {
     g_menuKey.store(vk);
     Save();
     LOG_INFO("[UI] menu key is now %s", KeyName(vk).c_str());
+}
+
+int GetMenuSize() { return g_menuSize.load(); }
+
+void SetMenuSize(int percent) {
+    g_menuSize.store(ClampMenuSize(percent));
+    Save();
+    LOG_INFO("[UI] menu size is now %d%%", g_menuSize.load());
 }
 
 std::string Format(const char* fmt, ...) {

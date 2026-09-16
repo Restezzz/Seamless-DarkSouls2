@@ -88,6 +88,12 @@ uint32_t GetSignCreateCount();
 uint32_t GetSummonRequestCount();
 void NoteSignCreate();
 void NoteSummonRequest();
+ULONGLONG GetLastSignCreateTime();   // GetTickCount64 of the last RequestCreateSign, 0 if none yet
+
+// Warns (log and screen, once per stall) when a sign or sign-list request has
+// been followed by 25 s without any message from the server: the game's line to
+// the server has stalled and no summon can work. Called from the game thread.
+void ServerWatchTick();
 
 // Aim the next sign this player creates at a given spot instead of the other
 // player's feet -- once. Used after a death, to be summoned back beside a

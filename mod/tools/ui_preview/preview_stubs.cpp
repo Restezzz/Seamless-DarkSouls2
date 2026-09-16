@@ -76,7 +76,7 @@ HWND GetGameWindow() { return nullptr; }
 
 namespace DS2Coop {
 SeamlessCoopMod& SeamlessCoopMod::GetInstance() { static SeamlessCoopMod Instance; return Instance; }
-void SeamlessCoopMod::SetUiPreferences(const std::string&, const std::string&) {}
+void SeamlessCoopMod::SetUiPreferences(const std::string&, const std::string&, int) {}
 uint8_t SeamlessCoopMod::GetDamageModeSetting() const { return 1; }
 void SeamlessCoopMod::SetDamageModeSetting(uint8_t) {}
 }

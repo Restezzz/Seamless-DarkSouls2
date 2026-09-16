@@ -42,7 +42,7 @@ bool SeamlessCoopMod::Initialize() {
 
     // Load configuration
     LoadConfig();
-    UI::InitUiSettings(m_config.language, m_config.menu_key);
+    UI::InitUiSettings(m_config.language, m_config.menu_key, m_config.menu_size);
 
     if (!m_config.enabled) {
         LOG_INFO("Mod is disabled in configuration");
@@ -356,6 +356,9 @@ void SeamlessCoopMod::LoadConfig() {
                     m_config.language = value;
                 } else if (key == "menu_key") {
                     m_config.menu_key = value;
+                } else if (key == "menu_size") {
+                    const int Percent = std::atoi(value.c_str());
+                    if (Percent > 0) m_config.menu_size = Percent;
                 } else if (key == "rest_sync") {
                     m_config.rest_sync = (value == "true" || value == "1");
                 } else if (key == "loot_sync") {
@@ -472,13 +475,15 @@ void SeamlessCoopMod::SaveConfig() {
         configFile << "\n# Interface (changed from the in-game menu)\n";
         configFile << "language=" << m_config.language << "\n";
         configFile << "menu_key=" << m_config.menu_key << "\n";
+        configFile << "menu_size=" << m_config.menu_size << "\n";
         configFile.close();
     }
 }
 
-void SeamlessCoopMod::SetUiPreferences(const std::string& language, const std::string& menuKey) {
+void SeamlessCoopMod::SetUiPreferences(const std::string& language, const std::string& menuKey, int menuSize) {
     m_config.language = language;
     m_config.menu_key = menuKey;
+    m_config.menu_size = menuSize;
     SaveConfig();
 }
 

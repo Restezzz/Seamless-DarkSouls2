@@ -77,6 +77,8 @@ private:
     Page  m_page = Page::Home;
     int   m_tab = 0;              // 0 lobby, 1 settings
     float m_menuAnim = 0.0f;      // 0 closed .. 1 open
+    float m_menuHeight = 0.0f;    // the window, last frame
+    float m_menuContent = 0.0f;   // what it holds, last frame; more than fits scrolls
     float m_hintAlpha = 0.0f;
     bool  m_focusField = false;
     bool  m_showAddresses = false;

@@ -110,8 +110,10 @@ struct ModConfig {
     bool debug_hotkeys = false;
     // Interface: "auto" follows the Windows language, "en"/"ru" is the
     // player's choice from the menu. The menu key is stored by name ("F1").
+    // menu_size is the overlay's size in percent of what suits the screen.
     std::string language = "auto";
     std::string menu_key = "F1";
+    int menu_size = 100;
     // Custom server redirect
     std::string server_ip = "127.0.0.1";    // IP of the ds3os custom server
     uint16_t server_port = 50031;            // Login port of custom server
@@ -133,8 +135,9 @@ public:
     void LoadConfig();
     void SaveConfig();
 
-    // Called by the menu when the language or menu key changes; writes the ini.
-    void SetUiPreferences(const std::string& language, const std::string& menuKey);
+    // Called by the menu when the language, menu key or menu size changes;
+    // writes the ini.
+    void SetUiPreferences(const std::string& language, const std::string& menuKey, int menuSize);
     // Damage between the players (0 none, 1 friendly fire, 2 PvP): read from and
     // written to damage_mode in the ini.
     uint8_t GetDamageModeSetting() const;
