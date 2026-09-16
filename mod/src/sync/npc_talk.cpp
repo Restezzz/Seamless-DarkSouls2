@@ -196,15 +196,22 @@ uint32_t __fastcall PhantomRowDetour(void* Chr) {
 uint64_t __fastcall PromptAllowedDetour(void* Chr, const uint8_t* Flags) {
     // The phantom id is zeroed for the duration of the call rather than the
     // answer being overruled afterwards -- see the top of this file for why the
-    // second way cannot work. Only for this player, only from the zone-enter
-    // handler, and only while actually a guest in someone else's world.
+    // second way cannot work. Only for this player and only from the zone-enter
+    // handler -- but in ANY stage of a join, not just once it has settled.
+    //
+    // 16.09: talking worked with everyone in Majula and never with Melentia at
+    // her bonfire, and this detour did not log a single swap all session. The
+    // guest had arrived right beside her: the zone check ran at arrival, before
+    // the join reached state 7 and before EnableSummoning zeroed the id, and the
+    // "no" stayed cached for as long as the guest stood in her zone. Majula only
+    // worked because those zones were entered later, with the id already 0.
     bool      Mine  = false;
     uintptr_t Type  = 0;
     uint8_t   Saved = 0;
     if (g_talkEnabled.load() && Chr &&
         reinterpret_cast<uintptr_t>(Chr) == LocalPlayer() &&
         reinterpret_cast<uintptr_t>(_ReturnAddress()) == ExeBase() + kPromptEnterRet &&
-        IsGuestInHostWorld() &&
+        Session::SessionManager::GetInstance().IsActive() &&
         ReadPtr(reinterpret_cast<uintptr_t>(Chr) + kTypeInChr, &Type)) {
         __try {
             uint8_t* Id = reinterpret_cast<uint8_t*>(Type + kPhantomIdInType);
@@ -229,10 +236,12 @@ uint64_t __fastcall PromptAllowedDetour(void* Chr, const uint8_t* Flags) {
         int32_t Action = -1;
         ReadI32(Prompt + kActionInPrompt, &Action);
         if (g_lastOpenedPrompt.exchange(Prompt) != Prompt) {
-            LOG_INFO("[TALK] prompt %p (action %d, %s): asked as a host instead of phantom id %u -> %s",
+            LOG_INFO("[TALK] prompt %p (action %d, %s): asked as a host instead of phantom id %u, %s -> %s",
                      reinterpret_cast<void*>(Prompt), Action,
                      Action == kActionTalk ? "talk" : "something else",
-                     static_cast<unsigned>(Saved), (Answer & 0xFF) ? "yes" : "still no");
+                     static_cast<unsigned>(Saved),
+                     IsGuestInHostWorld() ? "in the host's world" : "while the join settles",
+                     (Answer & 0xFF) ? "yes" : "still no");
         }
     }
     return Answer;

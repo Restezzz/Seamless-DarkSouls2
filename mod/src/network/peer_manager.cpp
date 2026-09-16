@@ -29,7 +29,11 @@ using namespace DS2Coop::Utils;
 
 constexpr uint32_t PACKET_MAGIC = 0x44533243; // 'DS2C'
 constexpr uint64_t HEARTBEAT_INTERVAL_MS = 5000;
-constexpr uint64_t TIMEOUT_DURATION_MS = 60000; // 60s — peers on Hamachi can have bursty latency
+// Twenty seconds: four missed heartbeats in a row. It was a full minute, and on
+// 16.09 a guest whose game had crashed went on standing in the host's lobby list
+// until it came back under a new id. Radmin VPN between two machines does not go
+// silent for four heartbeats running without the link really being gone.
+constexpr uint64_t TIMEOUT_DURATION_MS = 20000;
 
 static uint64_t NowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(

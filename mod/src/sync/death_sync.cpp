@@ -334,34 +334,24 @@ void Toast(const char* En, const char* Ru, UI::NotifyKind Kind) {
     UI::Overlay::GetInstance().ShowNotification(UI::Tr(En, Ru), 5.0f, Kind);
 }
 
-// AtPartner: come back at the partner's feet once the partner is up -- after a
-// boss fight (won, or the host fell and got up at its bonfire) and whenever the
-// partner is down right now.
+// Always back at the partner's feet, once the partner is up.
+//
+// It used to aim at the last bonfire this guest rested at in the host's world
+// (else the one beside its arrival point), and on 16.09 that was precisely the
+// complaint: after a death the guest came back at "its" bonfire instead of next
+// to the host. An invalid target means the sign goes under the partner's feet;
+// the rest and arrival spots are still recorded, for the log.
 void ArmRejoin(bool OwnDeath, bool AtPartner) {
     Rejoin R{};
     R.Pending = true;
     R.OwnDeath = OwnDeath;
     R.Since = GetTickCount64();
-    const bool PartnerDown = !g_partnerAlive.load();
-    if (AtPartner || PartnerDown) {
-        R.Target = Spot{};
-    } else if (OwnDeath) {
-        R.Target = g_restSpot.Valid ? g_restSpot : g_arrivalSpot;
-    } else if (!ReadLocalSpot(&R.Target)) {
-        R.Target = Spot{};
-    }
+    R.Target = Spot{};
     g_rejoin = R;
-    if (AtPartner || PartnerDown) {
-        LOG_INFO("[DEATH] after going home: back at the partner's feet once they are up (%s)",
-                 PartnerDown ? "they fell too" : "after the boss fight");
-    } else if (R.Target.Valid) {
-        LOG_INFO("[DEATH] after going home: back to the partner, sign aimed at %s -- map %u (%.2f, %.2f, %.2f)",
-                 OwnDeath ? (g_restSpot.Valid ? "the last rest" : "the bonfire by the arrival point")
-                          : "where I stood",
-                 R.Target.Area, R.Target.X, R.Target.Y, R.Target.Z);
-    } else {
-        LOG_INFO("[DEATH] after going home: back to the partner, at their feet (no respawn spot known)");
-    }
+    const bool PartnerDown = !g_partnerAlive.load();
+    LOG_INFO("[DEATH] after going home: back at the partner's feet%s",
+             PartnerDown ? " once they are up (they fell too)"
+                         : (AtPartner ? " (after the boss fight)" : ""));
 }
 
 void CallPhantomBranch(void* Result, int Reason) {
@@ -436,6 +426,29 @@ uint64_t __fastcall RequestWarpDetour(void* Gm, const int32_t* Request, uint64_t
     int32_t F[8] = {};
     const bool Readable = ReadWords(Request, F, 8);
     const uintptr_t Caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
+
+    // A guest may not travel between bonfires on its own inside the host's world.
+    //
+    // 16.09, three tries, three crashes (18:43:17, 19:30:42, and a process that
+    // died mid-line at 19:36:11), each one right after "warp requested: type 3,
+    // kind 2 ... multiplayer 0 -> taken" from the travel menu. The guest counts as
+    // host-equivalent here, so the game ran the warp the host's way: it told
+    // "every guest" to leave -- there are none -- and reloaded the GUEST'S OWN copy
+    // of the map while the session still had it in the host's world. Once it did
+    // not crash outright, the two ended up in separate copies of Heide's Tower:
+    // the host could not see the guest, enemies ignored it and took no damage, and
+    // leaving the lobby then brought the host's game down in its item code.
+    // Refusing is what the game itself does with a warp it will not take.
+    if (Readable && F[0] == 3 && F[1] == 2 && ReadJoinState() == kJoinInWorld) {
+        LOG_WARNING("[DEATH] refused: travel to bonfire %d while a guest in the host's world "
+                    "(it splits the two worlds and has crashed the game every time) (from exe+0x%llX)",
+                    F[6], static_cast<unsigned long long>(Caller - ExeBase()));
+        Toast("Only the host can travel between bonfires: for a guest it splits the worlds and crashes the game.",
+              "Перемещаться между кострами в мире хоста может только хост: у гостя это разводит миры и роняет игру.",
+              UI::NotifyKind::Warning);
+        return 0;
+    }
+
     const uint64_t Result = reinterpret_cast<WarpFn>(g_requestWarpOriginal)(Gm, Request, MpWarp);
     if (!Readable) {
         LOG_INFO("[DEATH] warp requested (request unreadable), multiplayer %u -> %s (from exe+0x%llX)",
@@ -455,11 +468,57 @@ void __fastcall MpWarpNoticeDetour(void* Mp, int Kind) {
     reinterpret_cast<NoticeFn>(g_mpNoticeOriginal)(Mp, Kind);
 }
 
+// The game throwing a guest out of the host's world by itself, as opposed to a
+// death (exe+0x2C9246, through the phantom branch) or leaving on purpose.
+constexpr uint32_t  kGameEjectCaller = 0x2C385C;
+constexpr ULONGLONG kEjectWindowMs   = 5 * 60 * 1000;
+constexpr int       kEjectsTolerated = 3;
+ULONGLONG           g_ejects[kEjectsTolerated] = {};
+std::atomic<bool>   g_leaveLobbyWanted{ false };
+
+// On 16.09 the game threw the guest out through exe+0x2C385C after it had talked
+// to the blacksmith, and twice in the very second it arrived -- and every time
+// the mod's lobby went on as if nothing had happened: the guest was out of the
+// world and still listed in it. Why the game does it is being looked into. Until
+// then the guest goes straight back in at the host's feet, and if the game keeps
+// throwing it out, the lobby is left for real so both sides agree on who is where.
+void NoteGameEject(int Reason) {
+    if (!g_enabled.load()) return;
+    if (!Session::SessionManager::GetInstance().IsActive() || !PartnerConnected()) return;
+    if (g_hold.Active || g_rejoin.Pending) return;   // a death is already being handled
+    if (!IsAlive(ReadLocalHp())) return;              // and a dead guest belongs to that path
+
+    const ULONGLONG Now = GetTickCount64();
+    int Recent = 0;
+    for (ULONGLONG At : g_ejects) {
+        if (At && Now - At < kEjectWindowMs) ++Recent;
+    }
+    if (Recent >= kEjectsTolerated) {
+        LOG_WARNING("[DEATH] thrown out of the host's world again (reason %d), %d times in five minutes "
+                    "-- leaving the lobby instead of trying again", Reason, Recent + 1);
+        Toast("The game keeps throwing you out of the host's world -- leaving the lobby.",
+              "Игра раз за разом выкидывает из мира хоста — выхожу из лобби.", UI::NotifyKind::Error);
+        g_leaveLobbyWanted.store(true);
+        return;
+    }
+    int Oldest = 0;
+    for (int I = 1; I < kEjectsTolerated; ++I) {
+        if (g_ejects[I] < g_ejects[Oldest]) Oldest = I;
+    }
+    g_ejects[Oldest] = Now;
+    LOG_INFO("[DEATH] the game threw me out of the host's world (reason %d) -- going straight back in "
+             "(%d of %d allowed in five minutes)", Reason, Recent + 1, kEjectsTolerated);
+    Toast("Thrown out of the host's world -- going back in...",
+          "Выкинуло из мира хоста — захожу обратно…", UI::NotifyKind::Warning);
+    ArmRejoin(false, true);
+}
+
 void __fastcall JoinLeaveDetour(void* Ctrl, int Reason) {
     const uintptr_t Caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
     LOG_INFO("[DEATH] join controller asked to leave: reason %d, state %d (from exe+0x%llX)",
              Reason, ReadJoinState(), static_cast<unsigned long long>(Caller - ExeBase()));
     reinterpret_cast<LeaveFn>(g_joinLeaveOriginal)(Ctrl, Reason);
+    if (Caller - ExeBase() == kGameEjectCaller) NoteGameEject(Reason);
 }
 
 // Read-only probe: what the game is about to do after this death.
@@ -1011,6 +1070,15 @@ void TickHold(int Join, int32_t Hp) {
 }
 
 void TickRejoin(int Join, int32_t Hp) {
+    // Leaving the lobby after the game kept throwing us out -- done here, once
+    // the game has finished sending us home, never from inside its own leave.
+    if (g_leaveLobbyWanted.load() && Join == -1) {
+        g_leaveLobbyWanted.store(false);
+        g_rejoin.Pending = false;
+        LOG_INFO("[DEATH] home -- leaving the lobby");
+        Session::SessionManager::GetInstance().LeaveSession();
+        return;
+    }
     if (g_cancelRejoin.exchange(false) && g_rejoin.Pending) {
         g_rejoin.Pending = false;
         LOG_INFO("[DEATH] left on purpose -- not joining again");
