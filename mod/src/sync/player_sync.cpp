@@ -3080,6 +3080,7 @@ bool PlayerSync::Initialize() {
     // A death no longer ends the co-op: the guest comes straight back to the
     // partner's world, and boss fights wait for both (death_sync.cpp).
     DS2Coop::Sync::InstallDeathSync(SeamlessCoopMod::GetInstance().GetConfig().death_respawn);
+    DS2Coop::Sync::SetBossSyncEnabled(SeamlessCoopMod::GetInstance().GetConfig().boss_sync);
 
     // A guest can talk to NPCs in the host's world (npc_talk.cpp)...
     DS2Coop::Sync::InstallNpcTalk();

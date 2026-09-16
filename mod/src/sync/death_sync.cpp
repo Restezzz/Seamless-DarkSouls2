@@ -81,6 +81,7 @@ constexpr uint32_t kRequestWarp    = 0x1C2A80;    // GMImp::RequestWarp(GMImp*, 
 constexpr uint32_t kMpWarpNotice   = 0x2C7EC0;    // (mp, kind): the host's warp, reason 4 to every guest
 constexpr uint32_t kJoinLeave      = 0x2C2F20;    // join controller slot A0 (ctrl, reason): leave
 constexpr uint32_t kResultSequence = 0x18F9C0;    // (EventResult*, out, arg3, code*, row*): builds the job chain
+constexpr uint32_t kBattleStart    = 0x180AF0;    // (boss manager, area index, battle id) -> AL: starts a boss fight
 constexpr uint32_t kPhantomParam   = 0x16F540;    // (phantom type) -> that type's param row ([GMImp+0x18] lookup)
 
 // The camera (docs §3.23). Offsets, not RVAs: all of them hang off GMImp.
@@ -113,6 +114,7 @@ using LeaveFn   = void(__fastcall*)(void*, int);
 using SeqFn     = void*(__fastcall*)(void*, void*, void*, const int*, const uint8_t*);
 using ParamRowFn = void*(__fastcall*)(uint32_t);
 using CamCmdFn   = void(__fastcall*)(void*, void*);
+using BattleStartFn = uint64_t(__fastcall*)(void*, int32_t, int32_t);
 
 // Set by MH_CreateHook before the hook goes live, so a detour never sees null.
 void* g_phantomBranchOriginal = nullptr;
@@ -123,6 +125,7 @@ void* g_mpNoticeOriginal      = nullptr;
 void* g_joinLeaveOriginal     = nullptr;
 void* g_resultSeqOriginal     = nullptr;
 bool  g_cameraMoved           = false;   // the camera was pointed away from this player
+void* g_battleStartOriginal   = nullptr;
 
 std::atomic<bool>      g_enabled{ true };
 std::atomic<bool>      g_partnerAlive{ true };     // from the partner's PlayerDeath / PlayerRespawn
@@ -134,6 +137,11 @@ std::atomic<bool>      g_cancelRejoin{ false };    // the player left on purpose
 std::atomic<int32_t>   g_partnerBossActive{ 0 };   // the host's boss fight, as it reported it
 std::atomic<int32_t>   g_partnerBossPhase{ 0 };
 std::atomic<ULONGLONG> g_partnerBossAt{ 0 };
+std::atomic<int32_t>   g_partnerBossArea{ -1 };     // the host's battle's event area index
+std::atomic<int32_t>   g_partnerBossCount{ 0 };     // the host's participant count
+std::atomic<bool>      g_bossSync{ true };          // ini boss_sync
+std::atomic<int32_t>   g_guestBattleTriedFor{ 0 };  // one start attempt per host fight
+std::atomic<int32_t>   g_guestBattleRunning{ 0 };   // the battle the mod started here
 
 // The executable's base never moves: asked for once, not every frame.
 uintptr_t ExeBase() {
@@ -190,6 +198,26 @@ bool ReadBoss(int32_t* Active, int32_t* Phase) {
     if (!ReadPtr(ExeBase() + kGameManagerImp, &Gm) || !ReadPtr(Gm + 0x70, &Events) ||
         !ReadPtr(Events + 0x88, &Boss)) return false;
     return ReadI32(Boss + 0x14, Active) && ReadI32(Boss + 0x204, Phase);
+}
+
+uintptr_t BossManagerPtr() {
+    uintptr_t Gm = 0, Events = 0, Boss = 0;
+    if (!ReadPtr(ExeBase() + kGameManagerImp, &Gm) || !ReadPtr(Gm + 0x70, &Events) ||
+        !ReadPtr(Events + 0x88, &Boss)) return 0;
+    return Boss;
+}
+
+// +0x10 the battle's event area index, +0x210 the participant count (one byte):
+// what a guest's own game needs from the host to run the same fight (§3.32).
+bool ReadBossExtra(int32_t* Area, int32_t* Count) {
+    const uintptr_t Boss = BossManagerPtr();
+    if (!Boss || !ReadI32(Boss + 0x10, Area)) return false;
+    __try {
+        *Count = *reinterpret_cast<const uint8_t*>(Boss + 0x210);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 bool InBossFight() {
@@ -376,13 +404,15 @@ void CallPhantomBranch(void* Result, int Reason) {
     reinterpret_cast<BranchFn>(g_phantomBranchOriginal)(Result, Reason);
 }
 
-void SendBossState(int32_t Active, int32_t Phase) {
+void SendBossState(int32_t Active, int32_t Phase, int32_t AreaIndex, int32_t Participants) {
     Network::BossStatePacket Packet{};
     Packet.header.magic = 0x44533243;
     Packet.header.type = Network::PacketType::BossState;
     Packet.header.size = sizeof(Network::BossStatePacket);
     Packet.active = Active;
     Packet.phase = Phase;
+    Packet.areaIndex = AreaIndex;
+    Packet.participants = Participants;
     Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
 }
 
@@ -690,6 +720,27 @@ void* __fastcall ResultSeqDetour(void* Result, void* Out, void* Arg3, const int*
     return reinterpret_cast<SeqFn>(g_resultSeqOriginal)(Result, Out, Arg3, Code, Use);
 }
 
+// Every boss battle start, logged with its caller -- and the one call a guest
+// must not get: the game's own script starting a battle the mod already started
+// here would find the boss row set and half-reset the fight (exe+0x181D70).
+uint64_t __fastcall BattleStartDetour(void* Mgr, int32_t AreaIndex, int32_t BattleId) {
+    const uintptr_t Caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
+    const int32_t Running = g_guestBattleRunning.load();
+    if (Mgr && Running != 0 && Running == BattleId) {
+        int32_t Active = 0, Phase = 0;
+        if (ReadI32(reinterpret_cast<uintptr_t>(Mgr) + 0x14, &Active) &&
+            ReadI32(reinterpret_cast<uintptr_t>(Mgr) + 0x204, &Phase) && Active == BattleId && Phase == 1) {
+            LOG_INFO("[BOSS] the game asked to start battle %d again (from exe+0x%llX) -- it already runs here, "
+                     "left alone", BattleId, static_cast<unsigned long long>(Caller - ExeBase()));
+            return 1;
+        }
+    }
+    const uint64_t R = reinterpret_cast<BattleStartFn>(g_battleStartOriginal)(Mgr, AreaIndex, BattleId);
+    LOG_INFO("[BOSS] battle %d in area %d, start asked from exe+0x%llX -> %s", BattleId, AreaIndex,
+             static_cast<unsigned long long>(Caller - ExeBase()), (R & 0xFF) ? "yes" : "no");
+    return R;
+}
+
 bool HookAt(uint32_t Rva, void* Detour, void** Original, const char* What) {
     if (DS2Coop::Hooks::HookManager::GetInstance().InstallHook(
             reinterpret_cast<void*>(ExeBase() + Rva), Detour, Original)) {
@@ -845,7 +896,82 @@ void TickBoss(int Join) {
     const ULONGLONG Now = GetTickCount64();
     if (Changed || (Active > 0 && Now - g_bossSentAt >= kBossResendMs)) {
         g_bossSentAt = Now;
-        SendBossState(Active, Phase);
+        int32_t Area = -1, Count = 0;
+        ReadBossExtra(&Area, &Count);
+        SendBossState(Active, Phase, Area, Count);
+    }
+}
+
+// The guest's own copy of the host's boss fight.
+//
+// 16.09, Ancient Dragonslayer: the guest's game never started the battle -- its
+// manager read "0 running" through the whole fight while the host's read
+// 1031010, phase 1 -- and all three symptoms follow from that one fact. No health
+// bar: the bar is made by the battle start, exe+0x180AF0. No damage: while a game
+// runs no battle of its own (+0x14 <= 0), exe+0x410280 keeps the boss
+// invincible, so the guest's hits died in the damage filter before any team was
+// looked at, and were never sent either. And the fog as a wall once the host was
+// inside: the door update exe+0x1D1920 turns both prompts off while the
+// participant count +0x210 is 0, and the count the host's game should have sent
+// never arrived. The start is script-driven (command 0x20469) and the guest's
+// script never got there, so the host sends its battle id, area index and count,
+// and the guest starts the same battle with the game's own function.
+void TickGuestBoss(int Join) {
+    if (!g_bossSync.load() || Join != kJoinInWorld) return;
+    if (!PartnerBossFight()) {
+        g_guestBattleTriedFor.store(0);
+        g_guestBattleRunning.store(0);
+        return;
+    }
+    if (!IsAlive(ReadLocalHp())) return;   // a dead guest is a spectator; starting a fight moves the camera
+    const uintptr_t Boss = BossManagerPtr();
+    if (!Boss) return;
+    const int32_t HostBattle = g_partnerBossActive.load();
+    const int32_t HostArea   = g_partnerBossArea.load();
+    const int32_t HostCount  = g_partnerBossCount.load();
+    __try {
+        // The fog: at least one participant, or the prompts stay off.
+        uint8_t* Count = reinterpret_cast<uint8_t*>(Boss + 0x210);
+        if (*Count == 0) {
+            *Count = static_cast<uint8_t>(HostCount > 0 && HostCount < 256 ? HostCount : 1);
+            LOG_INFO("[BOSS] the host is fighting %d -- participant count here set to %u, so the fog lets me in",
+                     HostBattle, static_cast<unsigned>(*Count));
+        }
+
+        // The battle: once per host fight, and only from a clean state.
+        const int32_t   Active = *reinterpret_cast<const int32_t*>(Boss + 0x14);
+        const uintptr_t Row    = *reinterpret_cast<const uintptr_t*>(Boss + 0x18);
+        const int32_t   Phase  = *reinterpret_cast<const int32_t*>(Boss + 0x204);
+        if (Active != 0 || Phase != 0) return;
+        if (g_guestBattleTriedFor.load() == HostBattle) return;
+        g_guestBattleTriedFor.store(HostBattle);
+        if (Row != 0) {
+            LOG_WARNING("[BOSS] not starting battle %d here: a boss row is already set (0x%llX), and starting "
+                        "over one half-resets the fight", HostBattle, static_cast<unsigned long long>(Row));
+            return;
+        }
+        if (HostArea < 0 || HostArea > 255) {
+            LOG_WARNING("[BOSS] not starting battle %d here: the host sent no usable area index (%d)",
+                        HostBattle, HostArea);
+            return;
+        }
+        uintptr_t Gm = 0, Gens = 0, Slot = 0;
+        if (!ReadPtr(ExeBase() + kGameManagerImp, &Gm) || !ReadPtr(Gm + 0x40, &Gens) ||
+            !ReadPtr(Gens + 0x170 + static_cast<uintptr_t>(HostArea) * 8, &Slot)) {
+            LOG_WARNING("[BOSS] not starting battle %d here: no enemy generators loaded for area %d",
+                        HostBattle, HostArea);
+            return;
+        }
+        const uint64_t Ok = reinterpret_cast<BattleStartFn>(ExeBase() + kBattleStart)(
+            reinterpret_cast<void*>(Boss), HostArea, HostBattle);
+        const int32_t NowActive = *reinterpret_cast<const int32_t*>(Boss + 0x14);
+        const int32_t NowPhase  = *reinterpret_cast<const int32_t*>(Boss + 0x204);
+        LOG_INFO("[BOSS] started the host's battle %d in area %d here -> %s (now %d running, phase %d)",
+                 HostBattle, HostArea, (Ok & 0xFF) ? "yes" : "no", NowActive, NowPhase);
+        if (Ok & 0xFF) g_guestBattleRunning.store(HostBattle);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LOG_WARNING("[BOSS] starting the host's battle here threw -- boss sync is off for the rest of this run");
+        g_bossSync.store(false);
     }
 }
 
@@ -1280,6 +1406,7 @@ bool InstallDeathSync(bool Enabled) {
         HookAt(kMpWarpNotice, reinterpret_cast<void*>(&MpWarpNoticeDetour), &g_mpNoticeOriginal, "host warp notice");
         HookAt(kJoinLeave, reinterpret_cast<void*>(&JoinLeaveDetour), &g_joinLeaveOriginal, "join controller leave");
         HookAt(kResultSequence, reinterpret_cast<void*>(&ResultSeqDetour), &g_resultSeqOriginal, "death result sequence");
+        HookAt(kBattleStart, reinterpret_cast<void*>(&BattleStartDetour), &g_battleStartOriginal, "boss battle start");
     }
     LOG_INFO("[DEATH] death handling %s", Enabled ? "ON: back in the partner's world after a death, boss fights wait for both"
                                                   : "off (death_respawn=false): the game's own way, probes only");
@@ -1296,6 +1423,7 @@ void DeathSyncGameTick() {
     TickLife(Hp);
     TickCameraHold(Hp);
     TickBoss(Join);
+    TickGuestBoss(Join);
     TickArrival(Join);
     TickTravelList(Join);
     TickBonfireSync(Join);
@@ -1328,13 +1456,22 @@ void NotePartnerBonfires(const void* entries, uint32_t count) {
     g_partnerBonfiresNew.store(true);
 }
 
-void NotePartnerBoss(int32_t Active, int32_t Phase) {
+void NotePartnerBoss(int32_t Active, int32_t Phase, int32_t AreaIndex, int32_t Participants) {
     const int32_t WasActive = g_partnerBossActive.exchange(Active);
     const int32_t WasPhase = g_partnerBossPhase.exchange(Phase);
+    g_partnerBossArea.store(AreaIndex);
+    g_partnerBossCount.store(Participants);
     g_partnerBossAt.store(GetTickCount64());
     if (WasActive != Active || WasPhase != Phase) {
-        LOG_INFO("[DEATH] the host's boss fight: %d running, phase %d", Active, Phase);
+        LOG_INFO("[DEATH] the host's boss fight: %d running, phase %d (area %d, %d participant(s))",
+                 Active, Phase, AreaIndex, Participants);
     }
+}
+
+void SetBossSyncEnabled(bool On) {
+    g_bossSync.store(On);
+    LOG_INFO("[BOSS] %s", On ? "a guest runs its own copy of the host's boss fight (boss_sync=true)"
+                             : "boss fights are left to the game (boss_sync=false)");
 }
 
 bool IsHostInBossFight() {

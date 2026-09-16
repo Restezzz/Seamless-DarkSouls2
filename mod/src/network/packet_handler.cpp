@@ -64,7 +64,8 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
         case PacketType::BossState:
             if (packet->size >= sizeof(BossStatePacket)) {
                 const auto* State = reinterpret_cast<const BossStatePacket*>(packet);
-                DS2Coop::Sync::NotePartnerBoss(State->active, State->phase);
+                DS2Coop::Sync::NotePartnerBoss(State->active, State->phase, State->areaIndex,
+                                               State->participants);
             }
             break;
 

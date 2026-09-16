@@ -79,6 +79,12 @@ struct ModConfig {
     // it. On, a guest who would otherwise walk in first cannot wake the boss by
     // itself -- but a host waiting at the fog then locks both players out.
     bool boss_fog_wait = false;
+    // A guest runs its own copy of the host's boss fight. The guest's game never
+    // started one on 16.09, and the health bar, damage to the boss and the fog
+    // once the host is inside all hang on that: the host now sends its battle id,
+    // area and participant count, and the guest starts the same battle with the
+    // game's own function (docs §3.32). On by default.
+    bool boss_sync = true;
     // Test keys F2-F11, Home and End (they place signs, flip patches, dump
     // memory). Off by default so nobody sets them off by habit; the menu key,
     // Insert and Esc always work.

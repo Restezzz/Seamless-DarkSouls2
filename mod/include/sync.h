@@ -142,7 +142,11 @@ bool InstallJoinProbe();
 void ChrDeathTick();   // game thread
 void DeathSyncGameTick();             // game thread, every frame
 void NotePartnerLife(bool alive);     // the partner's own PlayerDeath / PlayerRespawn
-void NotePartnerBoss(int32_t active, int32_t phase);   // the host's boss fight (BossState)
+// The host's boss fight (BossState): battle id, phase, the event area it belongs
+// to and the participant count -- what a guest's own game needs to run it too.
+void NotePartnerBoss(int32_t active, int32_t phase, int32_t areaIndex, int32_t participants);
+// Whether a guest starts its own copy of the host's boss fight (ini boss_sync).
+void SetBossSyncEnabled(bool on);
 bool IsHostInBossFight();             // a recent BossState from the host says a fight is on
 void CancelDeathRejoin();             // leaving on purpose: no automatic return
 // Put a sign down again for the host to summon, without the once-per-handshake

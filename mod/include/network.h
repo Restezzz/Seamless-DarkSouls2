@@ -135,8 +135,10 @@ struct EventFlagPacket {
 
 struct BossStatePacket {
     PacketHeader header;
-    int32_t active;   // EventBossBattleManager+0x14: the battle running (0 none)
-    int32_t phase;    // +0x204: 1 fighting, 2 won, 3 cleanup
+    int32_t active;        // EventBossBattleManager+0x14: the battle running (0 none)
+    int32_t phase;         // +0x204: 1 fighting, 2 won, 3 cleanup
+    int32_t areaIndex;     // +0x10: the event area the battle belongs to
+    int32_t participants;  // +0x210 (a byte): a guest's fog stays shut while its own is 0
 };
 
 struct MapOriginPacket {
