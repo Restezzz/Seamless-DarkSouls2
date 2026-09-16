@@ -378,12 +378,22 @@ std::atomic<bool> g_chestSettleLocal{ true };
 std::atomic<bool>     g_npcSpawnLocal{ true };
 std::atomic<uint32_t> g_npcSpawnCalls{ 0 };
 
+// Enemy drops for a guest (docs §3.33). The lot a dying enemy rolls is picked by
+// exe+0x1E2580, which asks this predicate (CALL at exe+0x1E25DB) and, in a world
+// entered by a multiplayer warp, takes CHR_PARAM +0x138 -- Paramdex calls it the
+// "overkilled" lot -- with no fallback, instead of the enemy's normal lot.
+// Answering no to that one call gives the guest the same lot row the host rolls,
+// guaranteed drops included, with the guest's own dice.
+std::atomic<bool>     g_guestDropsLocal{ true };
+std::atomic<uint32_t> g_guestDropLots{ 0 };
+
 static bool IsGuestInHostWorld();   // below, with the IsHost detour
 
 uint64_t __fastcall MpActiveHook(void* Session) {
     static const uintptr_t kBase = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
     static const uintptr_t kChestRollReturn = kBase + 0x1D0893;
     static const uintptr_t kGeneratorReturn = kBase + 0x40ED93;
+    static const uintptr_t kDropLotReturn   = kBase + 0x1E25E0;
     const uintptr_t Caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
     // Only once the guest stands in the host's world (join state 7), never
     // during the join load: the first join with this in crashed during that
@@ -396,6 +406,13 @@ uint64_t __fastcall MpActiveHook(void* Session) {
         const uint32_t Count = g_npcSpawnCalls.fetch_add(1) + 1;
         if (Count == 1 || Count % 2000 == 0) {
             LOG_INFO("[NPC] this world is finishing its characters here as a guest (%u calls)", Count);
+        }
+        return 0;
+    }
+    if (g_guestDropsLocal.load() && Caller == kDropLotReturn && IsGuestInHostWorld()) {
+        const uint32_t Count = g_guestDropLots.fetch_add(1) + 1;
+        if (Count <= 5 || Count % 200 == 0) {
+            LOG_INFO("[LOOT] an enemy's drop rolled here as a guest, from its normal lot (%u so far)", Count);
         }
         return 0;
     }
@@ -1051,6 +1068,35 @@ bool ToggleVetoPatch(bool Enable) {
     return true;
 }
 
+// Enemy drops for a guest, the first of two gates (docs §3.33).
+//
+// When any character dies, exe+0x13D430 asks exe+0x16F010 whether the LOCAL
+// player is a player who does not own the world (CALL at exe+0x13D460) and, if
+// it is, rolls a drop only for phantom types whose row in exe+0x10C0050 starts
+// with 2 or 3 -- white phantom, shade, sunbro. EnableSummoning zeroes the
+// guest's phantom id, row 0 starts with 0, and so a guest in the host's world has
+// not rolled a single drop since that went in. Answering "no" to that one call
+// lets the roll run; it only happens at all for a character with a generator
+// record (players keep -1 at +0x110) whose drop is pending.
+using NotOwnerFn = uint64_t(__fastcall*)(void*);
+static NotOwnerFn g_origNotOwner = nullptr;
+static std::atomic<uint32_t> g_guestDropDeaths{ 0 };
+
+uint64_t __fastcall NotOwnerHook(void* Chr) {
+    static const uintptr_t kBase = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+    static const uintptr_t kDeathDropReturn = kBase + 0x13D465;
+    if (g_guestDropsLocal.load() && reinterpret_cast<uintptr_t>(_ReturnAddress()) == kDeathDropReturn &&
+        IsGuestInHostWorld()) {
+        const uint32_t Count = g_guestDropDeaths.fetch_add(1) + 1;
+        if (Count <= 5 || Count % 200 == 0) {
+            LOG_INFO("[LOOT] a character died with a guest looking on -- its drop is rolled here too (%u so far)",
+                     Count);
+        }
+        return 0;
+    }
+    return g_origNotOwner(Chr);
+}
+
 bool HookBonfireGate() {
     static bool s_installed = false;
     if (s_installed) return true;
@@ -1058,6 +1104,16 @@ bool HookBonfireGate() {
 
     {
         const uintptr_t ExeBase = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+
+        void* NotOwnerTarget = reinterpret_cast<void*>(ExeBase + 0x16F010);
+        if (DS2Coop::Hooks::HookManager::GetInstance().InstallHook(
+                NotOwnerTarget, reinterpret_cast<void*>(&NotOwnerHook),
+                reinterpret_cast<void**>(&g_origNotOwner))) {
+            LOG_INFO("[LOOT] enemy drops: a guest in the host's world rolls them as well "
+                     "(exe+0x16F010 from exe+0x13D465, exe+0x5135F0 from exe+0x1E25E0)");
+        } else {
+            LOG_WARNING("[LOOT] could not hook exe+0x16F010 -- a guest still gets no enemy drops");
+        }
 
         void* MpTarget = reinterpret_cast<void*>(ExeBase + 0x5135F0);
         if (DS2Coop::Hooks::HookManager::GetInstance().InstallHook(

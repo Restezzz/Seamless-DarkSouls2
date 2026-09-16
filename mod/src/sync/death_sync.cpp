@@ -82,6 +82,8 @@ constexpr uint32_t kMpWarpNotice   = 0x2C7EC0;    // (mp, kind): the host's warp
 constexpr uint32_t kJoinLeave      = 0x2C2F20;    // join controller slot A0 (ctrl, reason): leave
 constexpr uint32_t kResultSequence = 0x18F9C0;    // (EventResult*, out, arg3, code*, row*): builds the job chain
 constexpr uint32_t kBattleStart    = 0x180AF0;    // (boss manager, area index, battle id) -> AL: starts a boss fight
+constexpr uint32_t kNetEnemyReset  = 0x517080;    // (NetEnemyManager): the game's own reset of the enemy sync table
+constexpr uint32_t kNetEnemyVtable = 0x10FB580;   // NetEnemyManager, *(netRoot)+0x28
 constexpr uint32_t kPhantomParam   = 0x16F540;    // (phantom type) -> that type's param row ([GMImp+0x18] lookup)
 
 // The camera (docs §3.23). Offsets, not RVAs: all of them hang off GMImp.
@@ -115,6 +117,7 @@ using SeqFn     = void*(__fastcall*)(void*, void*, void*, const int*, const uint
 using ParamRowFn = void*(__fastcall*)(uint32_t);
 using CamCmdFn   = void(__fastcall*)(void*, void*);
 using BattleStartFn = uint64_t(__fastcall*)(void*, int32_t, int32_t);
+using NetEnemyResetFn = void(__fastcall*)(void*);
 
 // Set by MH_CreateHook before the hook goes live, so a detour never sees null.
 void* g_phantomBranchOriginal = nullptr;
@@ -515,6 +518,45 @@ void CorrectArrival(const int32_t* Request, int32_t RawMap) {
     }
 }
 
+// A host travelling with a guest still in its session.
+//
+// The game's network enemy manager keeps raw pointers to the current map's enemy
+// statuses from the moment the session gets a second player (exe+0x517BF0), and
+// lets go of them only when the guest's last accept controller goes
+// (exe+0x2C9BD0 -> exe+0x517080). Vanilla never lets a host travel with a phantom
+// in its world; the mod does. On 16.09 the host travelled at 18:46:36, the old
+// map's enemy data was freed and its memory reused, and when the guest left at
+// 18:47:40 the detach loop exe+0x517E70 set bit 48 of status+0x3C through all
+// 255 stale pointers -- one bit flipped in the new map's objects, a
+// MapSfxSlotComponent's vtable among them (exe+0x10EB388 became exe+0x10FB388),
+// and the save pass jumped into garbage. The host's game crashed.
+//
+// Running the game's own reset right after the warp is taken -- the map is still
+// loaded, so those statuses are still alive -- empties the table exactly as a
+// guest's departure would. The detach loop skips null entries and zeroes each
+// entry it visits, so the departure that follows writes nothing; the table is
+// filled again, for the new map, when the guest joins there.
+void ResetEnemySyncForHostWarp() {
+    auto& Lobby = Session::SessionManager::GetInstance();
+    if (!Lobby.IsActive() || !Lobby.IsHost()) return;
+    __try {
+        uintptr_t Root = 0, Mgr = 0, Vtbl = 0;
+        if (!ReadPtr(ExeBase() + kNetRoot, &Root) || !ReadPtr(Root + 0x28, &Mgr) || !ReadPtr(Mgr, &Vtbl)) return;
+        if (Vtbl != ExeBase() + kNetEnemyVtable) {
+            LOG_WARNING("[DEATH] the enemy sync manager has an unexpected vtable (exe+0x%llX) -- left alone",
+                        static_cast<unsigned long long>(Vtbl - ExeBase()));
+            return;
+        }
+        int32_t State = 0;
+        if (!ReadI32(Mgr + 8, &State) || State == 0) return;
+        reinterpret_cast<NetEnemyResetFn>(ExeBase() + kNetEnemyReset)(reinterpret_cast<void*>(Mgr));
+        LOG_INFO("[DEATH] travelling with a guest in the session: emptied the enemy sync table (state %d) "
+                 "while this map is still loaded", State);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LOG_WARNING("[DEATH] emptying the enemy sync table before the warp threw -- left alone");
+    }
+}
+
 // The host has just travelled by bonfire: tell the guest to follow.
 void TellGuestHostTravelled(int32_t RawMap, int32_t Bonfire) {
     auto& Lobby = Session::SessionManager::GetInstance();
@@ -567,6 +609,7 @@ uint64_t __fastcall RequestWarpDetour(void* Gm, const int32_t* Request, uint64_t
     const uint64_t Result = reinterpret_cast<WarpFn>(g_requestWarpOriginal)(Gm, Request, MpWarp);
 
     if (Readable && (Result & 0xFF) && F[0] == 3 && F[1] == 2) {
+        ResetEnemySyncForHostWarp();
         TellGuestHostTravelled(F[2], F[6]);
     }
     if (!Readable) {
