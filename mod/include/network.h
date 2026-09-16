@@ -71,6 +71,10 @@ enum class PacketType : uint8_t {
     // in a copy of a world the host already left (16.09: host warp 18:38:52,
     // guest thrown out 18:41:01). The guest follows at once instead.
     HostTravelled = 0x3C,
+    // The host's choice of damage between the players: 0 none, 1 friendly fire
+    // without lock-on, 2 PvP. Sent every few seconds; a guest that has not heard
+    // it recently plays with none (pvp_modes.cpp, docs §3.25).
+    DamageMode = 0x3D,
 
     // Custom data
     ChatMessage = 0x40,
@@ -179,6 +183,12 @@ struct HostTravelledPacket {
     PacketHeader header;
     int32_t      map;       // the warp request's raw map id (0x0A1F0000 = map 10310000)
     int32_t      bonfire;   // the bonfire travelled to
+};
+
+struct DamageModePacket {
+    PacketHeader header;
+    uint8_t      mode;         // 0 none, 1 friendly fire without lock-on, 2 PvP
+    uint8_t      reserved[3];
 };
 #pragma pack(pop)
 

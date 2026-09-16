@@ -507,6 +507,35 @@ void Overlay::RenderSessionPage() {
     }
     ImGui::Dummy(ImVec2(0.0f, 2.0f * S));
 
+    // Damage between the players: the host picks, guests follow (pvp_modes.cpp).
+    {
+        Kit::SectionLabel(Tr("DAMAGE BETWEEN PLAYERS", "УРОН МЕЖДУ ИГРОКАМИ"));
+        const char* Names[3] = { Tr("None", "Нет"), Tr("Friendly fire", "Огонь по своим"), Tr("PvP", "PvP") };
+        const char* Hints[3] = {
+            Tr("Hits between you do nothing.", "Удары друг по другу ничего не делают."),
+            Tr("Hits land, but you cannot lock on to each other; enemies still fight both of you.",
+               "Удары проходят, но навестись друг на друга нельзя; враги по-прежнему бьют обоих."),
+            Tr("The guest is an evil spirit: lock-on works both ways, and the host's enemies leave the guest alone.",
+               "Гость \xE2\x80\x94 злой дух: наводиться можно в обе стороны, а враги хоста гостя не трогают."),
+        };
+        if (IsHost) {
+            int Current = DS2Coop::Sync::GetChosenDamageMode();
+            if (Current < 0 || Current > 2) Current = 0;
+            if (Kit::Tabs("damage", Names, 3, Current)) {
+                DS2Coop::Sync::SetDamageMode(static_cast<uint8_t>(Current));
+                DS2Coop::SeamlessCoopMod::GetInstance().SetDamageModeSetting(static_cast<uint8_t>(Current));
+                ShowNotification(Format(Tr("Damage between players: %s", "Урон между игроками: %s"), Names[Current]),
+                                 3.0f, NotifyKind::Info);
+            }
+            Kit::Paragraph(Hints[Current], Kit::Col::TextFaint);
+        } else {
+            int Mode = DS2Coop::Sync::GetDamageMode();
+            if (Mode < 0 || Mode > 2) Mode = 0;
+            Kit::Paragraph(Format(Tr("Chosen by the host: %s. %s", "Выбрал хост: %s. %s"), Names[Mode], Hints[Mode]).c_str(),
+                           Kit::Col::TextMuted);
+        }
+    }
+
     if (Kit::Button(Tr("Give me soapstones", "Выдать мелки"), Kit::ButtonKind::Secondary)) {
         if (DS2Coop::Sync::PlayerSync::GetInstance().GrantSoapstones()) {
             ShowNotification(Tr("Soapstones added to your inventory.", "Мелки добавлены в инвентарь."), 4.0f, NotifyKind::Success);

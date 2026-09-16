@@ -3137,6 +3137,9 @@ bool PlayerSync::Initialize() {
     // partner's world, and boss fights wait for both (death_sync.cpp).
     DS2Coop::Sync::InstallDeathSync(SeamlessCoopMod::GetInstance().GetConfig().death_respawn);
     DS2Coop::Sync::SetBossSyncEnabled(SeamlessCoopMod::GetInstance().GetConfig().boss_sync);
+    // Damage between the players, as this player last chose it as a host
+    // (pvp_modes.cpp). A guest plays by whatever its host sends.
+    DS2Coop::Sync::SetDamageMode(SeamlessCoopMod::GetInstance().GetDamageModeSetting());
 
     // A guest can talk to NPCs in the host's world (npc_talk.cpp)...
     DS2Coop::Sync::InstallNpcTalk();
@@ -4400,11 +4403,15 @@ void PlayerSync::EnableSummoning() {
 
                 uint8_t teamType = 0;
                 if (Memory::Read<uint8_t>(ptr_b0 + 0x3D, &teamType)) {
-                    if (teamType != 0) {
-                        Memory::Write<uint8_t>(ptr_b0 + 0x3D, (uint8_t)0);
-                        LOG_INFO("EnableSummoning: TeamType(PlayerType+0x3D) %u -> 0 (host)", (unsigned)teamType);
+                    // 0 like the host -- unless the host picked friendly fire or
+                    // PvP, which give the guest a team of its own (pvp_modes.cpp).
+                    const uint8_t wantTeam = DS2Coop::Sync::GuestOwnTeam();
+                    if (teamType != wantTeam) {
+                        Memory::Write<uint8_t>(ptr_b0 + 0x3D, wantTeam);
+                        LOG_INFO("EnableSummoning: TeamType(PlayerType+0x3D) %u -> %u (%s)", (unsigned)teamType,
+                                 (unsigned)wantTeam, wantTeam == 0 ? "host" : "the host's damage mode");
                     } else if (diag) {
-                        LOG_INFO("[IDENT] TeamType(+0x3D) already 0");
+                        LOG_INFO("[IDENT] TeamType(+0x3D) already %u", (unsigned)wantTeam);
                     }
                 }
 

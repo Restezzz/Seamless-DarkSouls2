@@ -372,6 +372,8 @@ void SeamlessCoopMod::LoadConfig() {
                     talkWrittenOff = !m_config.npc_talk;
                 } else if (key == "config_version") {
                     fileVersion = std::atoi(value.c_str());
+                } else if (key == "damage_mode") {
+                    m_config.damage_mode = value;
                 } else if (key == "npc_solid") {
                     m_config.npc_solid = (value == "true" || value == "1");
                 } else if (key == "debug_hotkeys") {
@@ -437,6 +439,7 @@ void SeamlessCoopMod::SaveConfig() {
         configFile << "boss_sync=" << (m_config.boss_sync ? "true" : "false") << "\n";
         configFile << "npc_talk=" << (m_config.npc_talk ? "true" : "false") << "\n";
         configFile << "npc_solid=" << (m_config.npc_solid ? "true" : "false") << "\n";
+        configFile << "damage_mode=" << m_config.damage_mode << "\n";
         configFile << "debug_hotkeys=" << (m_config.debug_hotkeys ? "true" : "false") << "\n";
         configFile << "sign_under_feet=" << (m_config.sign_under_feet ? "true" : "false") << "\n";
         configFile << "flag_sync=" << m_config.flag_sync << "\n";
@@ -457,5 +460,19 @@ void SeamlessCoopMod::SaveConfig() {
 void SeamlessCoopMod::SetUiPreferences(const std::string& language, const std::string& menuKey) {
     m_config.language = language;
     m_config.menu_key = menuKey;
+    SaveConfig();
+}
+
+uint8_t SeamlessCoopMod::GetDamageModeSetting() const {
+    if (m_config.damage_mode == "ff")  return 1;
+    if (m_config.damage_mode == "pvp") return 2;
+    return 0;
+}
+
+void SeamlessCoopMod::SetDamageModeSetting(uint8_t mode) {
+    const char* Names[3] = { "off", "ff", "pvp" };
+    const std::string Value = Names[mode <= 2 ? mode : 0];
+    if (m_config.damage_mode == Value) return;
+    m_config.damage_mode = Value;
     SaveConfig();
 }

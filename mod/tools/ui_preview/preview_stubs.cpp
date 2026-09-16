@@ -55,6 +55,10 @@ PlayerSync& PlayerSync::GetInstance() { static PlayerSync Instance; return Insta
 bool PlayerSync::GrantSoapstones() { return true; }
 void RequestLeaveWorld() {}
 bool GetLocalPlayerPosition(float& x, float& y, float& z, float& r) { x = y = z = r = 0.0f; return true; }
+static uint8_t s_damageMode = 1;   // friendly fire, so the preview shows a choice other than the default
+void    SetDamageMode(uint8_t mode) { s_damageMode = mode; }
+uint8_t GetDamageMode() { return s_damageMode; }
+uint8_t GetChosenDamageMode() { return s_damageMode; }
 }
 
 namespace DS2Coop::Hooks::ProtobufHooks {
@@ -73,6 +77,8 @@ HWND GetGameWindow() { return nullptr; }
 namespace DS2Coop {
 SeamlessCoopMod& SeamlessCoopMod::GetInstance() { static SeamlessCoopMod Instance; return Instance; }
 void SeamlessCoopMod::SetUiPreferences(const std::string&, const std::string&) {}
+uint8_t SeamlessCoopMod::GetDamageModeSetting() const { return 1; }
+void SeamlessCoopMod::SetDamageModeSetting(uint8_t) {}
 }
 
 // 0: no lobby. 1: hosting with a guest. 2: guest still waiting for the host.

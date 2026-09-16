@@ -121,11 +121,18 @@ void SetNpcTalkEnabled(bool on);
 uintptr_t GetPartnerCharacter(uint64_t maxAgeMs);
 
 // How the two players stand towards each other -- no damage, friendly fire
-// without lock-on, or a real fight (pvp_modes.cpp, docs §3.25). For now this
-// only reads: it names both players' team bytes and the relation the game has
-// between them, because the meaning of those numbers has never been measured
-// and the ones in the old notes came from a bad memory scan.
+// without lock-on, or a real fight (pvp_modes.cpp, docs §3.25). The host picks
+// the mode; every machine then gives the guest the same team, so each side's
+// damage filter agrees with the other's.
 void PvpModesGameTick();   // game thread
+enum : uint8_t { kDamageNone = 0, kDamageFriendlyFire = 1, kDamagePvp = 2 };
+void    SetDamageMode(uint8_t mode);      // the host's choice (ini damage_mode, the menu)
+uint8_t GetDamageMode();                  // what applies here now: the host's own, or the host's as sent
+uint8_t GetChosenDamageMode();            // this player's own choice, whatever role it has
+void    NoteHostDamageMode(uint8_t mode); // network thread
+// The team a guest keeps for itself in the host's world: 0 unless a damage mode
+// says otherwise. EnableSummoning writes this instead of a flat 0.
+uint8_t GuestOwnTeam();
 
 // Groundwork for a join with no summon sign at all (join_direct.cpp, docs
 // §3.27). A guest's entry is exe+0x2C6330, and three of the four paths into it

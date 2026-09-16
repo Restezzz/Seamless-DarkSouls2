@@ -85,6 +85,11 @@ struct ModConfig {
     // area and participant count, and the guest starts the same battle with the
     // game's own function (docs §3.32). On by default.
     bool boss_sync = true;
+    // Damage between the players when this player hosts: "off" (none), "ff"
+    // (friendly fire, no lock-on on each other) or "pvp" (the guest counts as an
+    // evil spirit: it can be locked on and hit, the enemies leave it alone).
+    // Changed from the lobby menu; guests follow their host's choice.
+    std::string damage_mode = "off";
     // Test keys F2-F11, Home and End (they place signs, flip patches, dump
     // memory). Off by default so nobody sets them off by habit; the menu key,
     // Insert and Esc always work.
@@ -116,6 +121,10 @@ public:
 
     // Called by the menu when the language or menu key changes; writes the ini.
     void SetUiPreferences(const std::string& language, const std::string& menuKey);
+    // Damage between the players (0 none, 1 friendly fire, 2 PvP): read from and
+    // written to damage_mode in the ini.
+    uint8_t GetDamageModeSetting() const;
+    void    SetDamageModeSetting(uint8_t mode);
 
 private:
     SeamlessCoopMod() = default;

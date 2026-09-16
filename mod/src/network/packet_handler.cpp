@@ -83,6 +83,13 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
             }
             break;
 
+        case PacketType::DamageMode:
+            if (packet->size >= sizeof(DamageModePacket)) {
+                const auto* Mode = reinterpret_cast<const DamageModePacket*>(packet);
+                DS2Coop::Sync::NoteHostDamageMode(Mode->mode);
+            }
+            break;
+
         case PacketType::FlagBulk:
             if (packet->size >= sizeof(FlagBulkPacket)) {
                 const auto* Bulk = reinterpret_cast<const FlagBulkPacket*>(packet);
