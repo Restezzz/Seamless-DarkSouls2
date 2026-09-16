@@ -63,6 +63,7 @@ constexpr uint32_t  kQueuePlayer      = 0x51B0E0;   // (player list, peer id*, r
 constexpr uint32_t  kFindById         = 0x51D4B0;   // (player list, peer id*) -> the character slot, or 0
 constexpr uint32_t  kPeerIdCtor       = 0xA3DA40;   // (peer id)
 constexpr uint32_t  kPeerIdCopy       = 0xA3DBD0;   // (peer id, source peer id*)
+constexpr uint32_t  kPeerIdClear      = 0xA3E2B0;   // (peer id): releases the reference, +0 = 0
 constexpr uint32_t  kEnemyReset       = 0x517080;   // (enemy manager)
 constexpr uint32_t  kEnemyArm         = 0x517040;   // (enemy manager): +0x74 = 1, +0x198 = 0
 constexpr uint32_t  kEnemySnapApplied = 0x516370;   // (enemy manager): +0x198 = 1
@@ -216,6 +217,48 @@ uint64_t __fastcall QueuePlayerDetour(void* List, void* Id, void* Record, uint8_
     return Queued;
 }
 
+// A kept record is only ever good for the stay it was taken in. Once the partner
+// is out of this world -- or the lobby is gone -- it is let go, reference and all:
+// queued later it would make a character for a player who is not here (code review
+// of f4027d0: a host standing in the map a guest was standing in AT HOME, after an
+// earlier summon, would have queued that old record).
+bool ClearRecordSafe() {
+    __try {
+        if (g_peerIdMade) reinterpret_cast<ObjFn>(ExeBase() + kPeerIdClear)(g_peerId);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void ForgetRecord(const char* Why) {
+    std::lock_guard<std::mutex> Lock(g_recordMutex);
+    if (!g_haveRecord) return;
+    g_haveRecord = false;
+    ClearRecordSafe();
+    LOG_INFO("[TRAVEL] the partner's kept record let go: %s", Why);
+}
+
+// The host's side of "the partner is in my world": an accept controller that has
+// taken the guest all the way in (state 0x10).
+bool GuestFullyInMyWorld(bool* AnyController) {
+    *AnyController = false;
+    uintptr_t Root = 0, Mp = 0;
+    if (!ReadPtr(ExeBase() + kNetRoot, &Root) || !ReadPtr(Root + 0x18, &Mp)) return false;
+    __try {
+        uintptr_t It  = *reinterpret_cast<const uintptr_t*>(Mp + 0x48);
+        const uintptr_t End = *reinterpret_cast<const uintptr_t*>(Mp + 0x50);
+        for (int Guard = 0; It && It < End && Guard < 16; It += 8, ++Guard) {
+            const uintptr_t Ctrl = *reinterpret_cast<const uintptr_t*>(It);
+            if (!Ctrl) continue;
+            *AnyController = true;
+            if (*reinterpret_cast<const int32_t*>(Ctrl + 0x150) == 0x10) return true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+
 bool PartnerCharacterHereSafe(uintptr_t List) {
     __try {
         return reinterpret_cast<FindFn>(ExeBase() + kFindById)(reinterpret_cast<void*>(List), g_peerId) != nullptr;
@@ -304,9 +347,26 @@ void NotePartnerRawMap(int32_t RawMap) {
 }
 
 void TravelResyncTick() {
-    if (!g_enabled.load() || !g_queueOriginal) return;
+    if (!g_queueOriginal) return;
     auto& Lobby = Session::SessionManager::GetInstance();
-    if (!Lobby.IsActive()) return;
+
+    // Whether the partner is in this world at all, before anything else.
+    uintptr_t JoinCtrl = 0;
+    const int  Join  = JoinState(&JoinCtrl);
+    const bool Guest = Join == 7;
+    const bool Host  = Lobby.IsActive() && Lobby.IsHost();
+    bool AnyAccept = false;
+    const bool GuestIn = Host && GuestFullyInMyWorld(&AnyAccept);
+    if (!Lobby.IsActive()) {
+        ForgetRecord("the lobby is gone");
+        g_partnerMap.store(0);
+        g_partnerMapAt.store(0);
+        return;
+    }
+    if (Host && !AnyAccept) ForgetRecord("no guest in my world any more");
+    if (!Host && (Join < 0 || Join >= 8)) ForgetRecord("I am out of the host's world");
+    if (!g_enabled.load()) return;
+
     if (!Standing()) return;
     int32_t MyMap = 0;
     if (!ReadLocalRawMap(&MyMap)) return;
@@ -325,9 +385,6 @@ void TravelResyncTick() {
         SendMap(MyMap);
     }
 
-    uintptr_t JoinCtrl = 0;
-    const bool Guest = JoinState(&JoinCtrl) == 7;
-    const bool Host  = Lobby.IsHost();
     if (!Guest && !Host) return;
 
     // 3. A table filled for a map this player has left is emptied before that map
@@ -340,6 +397,9 @@ void TravelResyncTick() {
         return;
     }
 
+    // A host puts nobody back while the guest is not fully in its world: the guest's
+    // map packets say where it stands, and at home it may well stand in this map.
+    if (Host && !GuestIn) return;
     const ULONGLONG TheirAt = g_partnerMapAt.load();
     const bool SameMap = TheirAt && Now - TheirAt < kPartnerMapFresh && g_partnerMap.load() == MyMap;
     if (!SameMap || Now - s_myMapSince < kSettleMs) return;

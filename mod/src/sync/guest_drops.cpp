@@ -156,9 +156,15 @@ bool CopyPacketSafe(uint8_t* Dst, const void* Src) {
     }
 }
 
+// The receiver may run on the game's network side: nothing here walks game
+// structures. The packet is only queued; the tick, on the game thread, decides
+// whether this player is a guest in the host's world at all.
 uint64_t __fastcall DeadReceiveDetour(void* Receiver, char Id, void* Data, uint32_t Length, void* Arg5) {
     const uint64_t R = g_receive(Receiver, Id, Data, Length, Arg5);
-    if (Id != '7' || Length != 0x18 || !Data || !g_enabled.load() || !GuestInHostWorld()) return R;
+    if (Id != '7' || Length != 0x18 || !Data || !g_enabled.load() ||
+        !Session::SessionManager::GetInstance().IsActive()) {
+        return R;
+    }
     uint8_t Packet[0x18];
     if (!CopyPacketSafe(Packet, Data)) return R;
     const ULONGLONG Due = GetTickCount64() + kRollDelayMs;

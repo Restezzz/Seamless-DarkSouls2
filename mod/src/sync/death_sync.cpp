@@ -915,7 +915,10 @@ void* __fastcall ResultSeqDetour(void* Result, void* Out, void* Arg3, const int*
         const bool HoldBack = g_enabled.load() && Guest && InBoss &&
                               (OwnDeath ? g_partnerAlive.load() : IsAlive(Hp));
         if (HoldBack) {
-            for (int I = 0; I < 24; ++I) Copy[I] = Row[I];
+            // From Use, not Row: a change made above stays made.
+            if (Use != Copy) {
+                for (int I = 0; I < 24; ++I) Copy[I] = Row[I];
+            }
             Copy[1] = 0;
             Use = Copy;
             LOG_INFO("[DEATH] held in the host's world -- leaving out the game's defeat message "
