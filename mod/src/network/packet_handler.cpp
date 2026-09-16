@@ -83,6 +83,12 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
             }
             break;
 
+        case PacketType::PlayerMap:
+            if (packet->size >= sizeof(PlayerMapPacket)) {
+                DS2Coop::Sync::NotePartnerRawMap(reinterpret_cast<const PlayerMapPacket*>(packet)->rawMap);
+            }
+            break;
+
         case PacketType::DamageMode:
             if (packet->size >= sizeof(DamageModePacket)) {
                 const auto* Mode = reinterpret_cast<const DamageModePacket*>(packet);

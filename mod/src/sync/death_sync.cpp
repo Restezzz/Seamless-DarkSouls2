@@ -605,7 +605,7 @@ void CorrectArrival(const int32_t* Request, int32_t RawMap) {
 // filled again, for the new map, when the guest joins there.
 void ResetEnemySyncForHostWarp() {
     auto& Lobby = Session::SessionManager::GetInstance();
-    if (!Lobby.IsActive() || !Lobby.IsHost()) return;
+    if (!Lobby.IsActive()) return;   // host or guest: a client's table points into the old map just the same
     __try {
         uintptr_t Root = 0, Mgr = 0, Vtbl = 0;
         if (!ReadPtr(ExeBase() + kNetRoot, &Root) || !ReadPtr(Root + 0x28, &Mgr) || !ReadPtr(Mgr, &Vtbl)) return;
@@ -617,7 +617,7 @@ void ResetEnemySyncForHostWarp() {
         int32_t State = 0;
         if (!ReadI32(Mgr + 8, &State) || State == 0) return;
         reinterpret_cast<NetEnemyResetFn>(ExeBase() + kNetEnemyReset)(reinterpret_cast<void*>(Mgr));
-        LOG_INFO("[DEATH] travelling with a guest in the session: emptied the enemy sync table (state %d) "
+        LOG_INFO("[DEATH] travelling in a co-op session: emptied the enemy sync table (state %d) "
                  "while this map is still loaded", State);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         LOG_WARNING("[DEATH] emptying the enemy sync table before the warp threw -- left alone");
@@ -641,31 +641,63 @@ void TellGuestHostTravelled(int32_t RawMap, int32_t Bonfire) {
              RawMapToArea(RawMap));
 }
 
+// A guest still on its way into the host's world: an accept controller that has
+// not reached state 0x10. A host warp now would make it drop the guest with code 6
+// on the spot (accept slot E0, reason 4, when slot 88 says "not fully in").
+bool AGuestIsStillJoining(int32_t* StateOut) {
+    uintptr_t Root = 0, Mp = 0;
+    if (!ReadPtr(ExeBase() + kNetRoot, &Root) || !ReadPtr(Root + 0x18, &Mp)) return false;
+    __try {
+        uintptr_t It  = *reinterpret_cast<const uintptr_t*>(Mp + 0x48);
+        uintptr_t End = *reinterpret_cast<const uintptr_t*>(Mp + 0x50);
+        for (int Guard = 0; It && It < End && Guard < 16; It += 8, ++Guard) {
+            const uintptr_t Ctrl = *reinterpret_cast<const uintptr_t*>(It);
+            if (!Ctrl) continue;
+            const int32_t State = *reinterpret_cast<const int32_t*>(Ctrl + 0x150);
+            if (State >= 1 && State < 0x10) {
+                *StateOut = State;
+                return true;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
+}
+
 uint64_t __fastcall RequestWarpDetour(void* Gm, const int32_t* Request, uint64_t MpWarp) {
     int32_t F[8] = {};
     const bool Readable = ReadWords(Request, F, 8);
     const uintptr_t Caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
 
-    // A guest may not travel between bonfires on its own inside the host's world.
-    //
-    // 16.09, three tries, three crashes (18:43:17, 19:30:42, and a process that
-    // died mid-line at 19:36:11), each one right after "warp requested: type 3,
-    // kind 2 ... multiplayer 0 -> taken" from the travel menu. The guest counts as
-    // host-equivalent here, so the game ran the warp the host's way: it told
-    // "every guest" to leave -- there are none -- and reloaded the GUEST'S OWN copy
-    // of the map while the session still had it in the host's world. Once it did
-    // not crash outright, the two ended up in separate copies of Heide's Tower:
-    // the host could not see the guest, enemies ignored it and took no damage, and
-    // leaving the lobby then brought the host's game down in its item code.
-    // Refusing is what the game itself does with a warp it will not take.
-    if (Readable && F[0] == 3 && F[1] == 2 && ReadJoinState() == kJoinInWorld) {
-        LOG_WARNING("[DEATH] refused: travel to bonfire %d while a guest in the host's world "
-                    "(it splits the two worlds and has crashed the game every time) (from exe+0x%llX)",
-                    F[6], static_cast<unsigned long long>(Caller - ExeBase()));
-        Toast("Only the host can travel between bonfires: for a guest it splits the worlds and crashes the game.",
-              "Перемещаться между кострами в мире хоста может только хост: у гостя это разводит миры и роняет игру.",
-              UI::NotifyKind::Warning);
-        return 0;
+    // Travel in a co-op session (docs §3.38). Bonfire travel is type 3 kind 2, the
+    // ship at No-man's Wharf type 4 kind 3.
+    const bool Travel = Readable && ((F[0] == 3 && F[1] == 2) || (F[0] == 4 && F[1] == 3));
+    const bool Guest  = ReadJoinState() == kJoinInWorld;
+    auto& Lobby = Session::SessionManager::GetInstance();
+    uint64_t UseMp = MpWarp;
+
+    // A guest travels on its own and stays in the host's world. The refusal of
+    // 16.09 and the "follow the host" that went with it are gone (asked for on
+    // 16.09 evening): the crashes came from what a reload leaves behind -- the
+    // enemy sync table pointing into the old map and the partner's avatar gone --
+    // and that is handled after the warp and by TravelResyncTick. The load is a
+    // multiplayer one, so the world stays the host's (its flags, its rules); loaded
+    // as its own, as on 16.09, the guest ended up in a copy of the map of its own.
+    if (Travel && Guest && g_enabled.load() && !(MpWarp & 0xFF)) {
+        UseMp = (MpWarp & ~static_cast<uint64_t>(0xFF)) | 1;
+        LOG_INFO("[TRAVEL] travelling as a guest (bonfire %d, map %u) -- loaded as a multiplayer warp, "
+                 "so the world stays the host's", F[6], RawMapToArea(F[2]));
+    }
+    // A host does not travel while a guest is half-way in: the game would drop it.
+    if (Travel && !Guest && g_enabled.load() && Lobby.IsActive() && Lobby.IsHost()) {
+        int32_t JoiningState = 0;
+        if (AGuestIsStillJoining(&JoiningState)) {
+            LOG_WARNING("[TRAVEL] refused: travel while a guest is still joining (accept state 0x%X) -- "
+                        "the game would drop it", JoiningState);
+            Toast("Wait a moment: your partner is still entering your world.",
+                  "Подожди немного: напарник ещё входит в твой мир.", UI::NotifyKind::Warning);
+            return 0;
+        }
     }
 
     if (Readable && F[0] == 0 && F[1] == 4 && (MpWarp & 0xFF) &&
@@ -673,11 +705,12 @@ uint64_t __fastcall RequestWarpDetour(void* Gm, const int32_t* Request, uint64_t
         CorrectArrival(Request, F[2]);
     }
 
-    const uint64_t Result = reinterpret_cast<WarpFn>(g_requestWarpOriginal)(Gm, Request, MpWarp);
+    const uint64_t Result = reinterpret_cast<WarpFn>(g_requestWarpOriginal)(Gm, Request, UseMp);
 
-    if (Readable && (Result & 0xFF) && F[0] == 3 && F[1] == 2) {
+    if (Travel && (Result & 0xFF) && Lobby.IsActive()) {
         ResetEnemySyncForHostWarp();
-        TellGuestHostTravelled(F[2], F[6]);
+        NoteLocalTravel(F[2]);
+        if (!Guest) TellGuestHostTravelled(F[2], F[6]);
     }
     if (!Readable) {
         LOG_INFO("[DEATH] warp requested (request unreadable), multiplayer %u -> %s (from exe+0x%llX)",
@@ -686,7 +719,7 @@ uint64_t __fastcall RequestWarpDetour(void* Gm, const int32_t* Request, uint64_t
         return Result;
     }
     LOG_INFO("[DEATH] warp requested: type %d, kind %d, map %d, fade %d, id %d, multiplayer %u -> %s (from exe+0x%llX)",
-             F[0], F[1], F[2], F[5] & 0xFF, F[6], static_cast<unsigned>(MpWarp & 0xFF),
+             F[0], F[1], F[2], F[5] & 0xFF, F[6], static_cast<unsigned>(UseMp & 0xFF),
              (Result & 0xFF) ? "taken" : "refused",
              static_cast<unsigned long long>(Caller - ExeBase()));
     return Result;
@@ -714,12 +747,25 @@ void __fastcall MpWarpNoticeDetour(void* Mp, int Kind) {
 // same case changes nothing. The guest's own "duty fulfilled" is kept from
 // sending it home in PhantomBranchDetour. Other reasons go through untouched;
 // all of them are logged, they are rare.
+//
+// Reason 4 is the host's own warp. For a guest that is fully in (controller state
+// 0x10) it only marks the controller ([+0x1B8] |= 0x10), and exe+0x2BE090 drops the
+// guest 300 s later (16.09: host warp 18:38:52, guest thrown out 18:41:01). A guest
+// now stays when the host travels, so that mark is not made; a guest still on its
+// way in cannot get here -- the host's travel is refused while one is (RequestWarpDetour).
+constexpr int kAcceptHostWarp = 4;
+
 void __fastcall AcceptEventDetour(void* Ctrl, int Reason) {
     auto& Lobby = Session::SessionManager::GetInstance();
-    const bool Keep = Reason == kAcceptBossKilled && g_enabled.load() && Lobby.IsActive() && Lobby.IsHost();
-    LOG_INFO("[DEATH] a guest's accept controller gets reason %d%s", Reason,
-             Keep ? " (a boss died here) -- not passed on, the guest stays in my world" : "");
-    if (Keep) return;
+    const bool HostInLobby = g_enabled.load() && Lobby.IsActive() && Lobby.IsHost();
+    int32_t State = -1;
+    if (Ctrl) ReadI32(reinterpret_cast<uintptr_t>(Ctrl) + 0x150, &State);
+    const bool KeepBoss = Reason == kAcceptBossKilled && HostInLobby;
+    const bool KeepWarp = Reason == kAcceptHostWarp && HostInLobby && State == 0x10;
+    LOG_INFO("[DEATH] a guest's accept controller (state 0x%X) gets reason %d%s", State, Reason,
+             KeepBoss ? " (a boss died here) -- not passed on, the guest stays in my world"
+             : KeepWarp ? " (my warp) -- not passed on, the guest is not dropped five minutes later" : "");
+    if (KeepBoss || KeepWarp) return;
     reinterpret_cast<AcceptEventFn>(g_acceptEventOriginal)(Ctrl, Reason);
 }
 
@@ -1562,30 +1608,22 @@ void TickHold(int Join, int32_t Hp) {
 // guest was thrown out at 18:41:01 after two minutes alone in a copy of a world
 // the host had left. So the guest follows at once: it leaves that copy and joins
 // again where the host went, once the host has actually arrived there.
+// The host travelled. The guest used to leave and be summoned again where the
+// host went -- "idiotic", in the words of the one who plays it, and rightly: it is
+// a trip home and back for something the guest may not even want. Now the guest
+// stays where it is, in the host's world; it can travel after the host by itself,
+// and TravelResyncTick puts the two back together when they share a map.
 void TickHostTravel(int Join) {
     if (!g_hostTravelPending.exchange(false)) return;
     const int32_t Bonfire = g_hostTravelBonfire.load();
-    if (!g_enabled.load()) return;
-    if (Join != kJoinInWorld) {
-        LOG_INFO("[DEATH] the host travelled to bonfire %d, and I am not in its world right now -- nothing to follow",
-                 Bonfire);
-        return;
+    LOG_INFO("[TRAVEL] the host travelled to bonfire %d (map %u)%s", Bonfire,
+             RawMapToArea(g_hostTravelMap.load()),
+             Join == kJoinInWorld ? " -- I stay where I am; travel there to join up again" : "");
+    if (Join == kJoinInWorld && g_enabled.load()) {
+        Toast("The host travelled -- travel to the same bonfire to join up again.",
+              "Хост переместился — переместись к тому же костру, чтобы снова быть вместе.",
+              UI::NotifyKind::Player);
     }
-    if (g_hold.Active) {
-        LOG_INFO("[DEATH] the host travelled to bonfire %d while I am held in its boss fight -- the hold decides",
-                 Bonfire);
-        return;
-    }
-    Spot From{};
-    ReadPartnerSpot(&From);   // still the host's position from before its load
-    LOG_INFO("[DEATH] the host travelled to bonfire %d -- following: leaving this copy of its world", Bonfire);
-    Toast("The host travelled -- following...", "Хост переместился — иду за ним…", UI::NotifyKind::Player);
-    RequestLeaveWorld();
-    g_cancelRejoin.store(false);   // this leave starts a follow; it is not a goodbye
-    ArmRejoin(false, true);
-    g_rejoin.WaitHostArrival = true;
-    g_rejoin.From = From;
-    g_rejoin.HostSettledSince = 0;
 }
 
 void TickRejoin(int Join, int32_t Hp) {
@@ -1704,6 +1742,7 @@ void DeathSyncGameTick() {
     TickHold(Join, Hp);
     TickHostTravel(Join);
     TickRejoin(Join, Hp);
+    TravelResyncTick();
 }
 
 void NotePartnerLife(bool Alive) {

@@ -378,6 +378,16 @@ void SeamlessCoopMod::LoadConfig() {
                     fileVersion = std::atoi(value.c_str());
                 } else if (key == "damage_mode") {
                     m_config.damage_mode = value;
+                } else if (key == "guest_npc_talk_scripts") {
+                    m_config.guest_npc_talk_scripts = (value == "true" || value == "1");
+                } else if (key == "guest_npc_local") {
+                    m_config.guest_npc_local = (value == "true" || value == "1");
+                } else if (key == "guest_wait_for_snapshot") {
+                    m_config.guest_wait_for_snapshot = (value == "true" || value == "1");
+                } else if (key == "travel_resync") {
+                    m_config.travel_resync = (value == "true" || value == "1");
+                } else if (key == "mp_gates") {
+                    m_config.mp_gates = (value == "true" || value == "1");
                 } else if (key == "npc_solid") {
                     m_config.npc_solid = (value == "true" || value == "1");
                 } else if (key == "debug_hotkeys") {
@@ -444,6 +454,11 @@ void SeamlessCoopMod::SaveConfig() {
         configFile << "npc_talk=" << (m_config.npc_talk ? "true" : "false") << "\n";
         configFile << "npc_solid=" << (m_config.npc_solid ? "true" : "false") << "\n";
         configFile << "damage_mode=" << m_config.damage_mode << "\n";
+        configFile << "guest_npc_talk_scripts=" << (m_config.guest_npc_talk_scripts ? "true" : "false") << "\n";
+        configFile << "guest_npc_local=" << (m_config.guest_npc_local ? "true" : "false") << "\n";
+        configFile << "guest_wait_for_snapshot=" << (m_config.guest_wait_for_snapshot ? "true" : "false") << "\n";
+        configFile << "travel_resync=" << (m_config.travel_resync ? "true" : "false") << "\n";
+        configFile << "mp_gates=" << (m_config.mp_gates ? "true" : "false") << "\n";
         configFile << "debug_hotkeys=" << (m_config.debug_hotkeys ? "true" : "false") << "\n";
         configFile << "sign_under_feet=" << (m_config.sign_under_feet ? "true" : "false") << "\n";
         configFile << "flag_sync=" << m_config.flag_sync << "\n";

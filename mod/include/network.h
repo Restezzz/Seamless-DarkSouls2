@@ -75,6 +75,10 @@ enum class PacketType : uint8_t {
     // without lock-on, 2 PvP. Sent every few seconds; a guest that has not heard
     // it recently plays with none (pvp_modes.cpp, docs §3.25).
     DamageMode = 0x3D,
+    // The map this player really stands in, the game's own id, every two seconds.
+    // The sign map the mod knows is a guest's home map while it is in the host's
+    // world, so travelling in a session needs this (travel_sync.cpp).
+    PlayerMap = 0x3E,
 
     // Custom data
     ChatMessage = 0x40,
@@ -189,6 +193,11 @@ struct DamageModePacket {
     PacketHeader header;
     uint8_t      mode;         // 0 none, 1 friendly fire without lock-on, 2 PvP
     uint8_t      reserved[3];
+};
+
+struct PlayerMapPacket {
+    PacketHeader header;
+    int32_t      rawMap;       // 0x0A1F0000 = map 10310000
 };
 #pragma pack(pop)
 

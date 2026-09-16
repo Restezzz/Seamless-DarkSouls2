@@ -18,6 +18,9 @@ add_library(ds2_seamless_coop SHARED
     sync/pvp_modes.cpp
     sync/join_direct.cpp
     sync/chr_death.cpp
+    sync/guest_world.cpp
+    sync/travel_sync.cpp
+    sync/mp_gates.cpp
     utils/logger.cpp
     utils/crash_log.cpp
     utils/memory.cpp

@@ -158,6 +158,23 @@ bool IsHostInBossFight();             // a recent BossState from the host says a
 // A guest's copy of a boss fight the host won is handing out its reward right
 // now (phase 3 of that battle here): the owner-only gates may let this guest in.
 bool GuestBossRewardDue();
+
+// A guest's world as the game builds it (guest_world.cpp, docs §3.37): NPC scripts
+// and the NPC factory asked "multiplayer world?" answered as for the owner, and a
+// joining guest's characters put in only once the host's world has arrived.
+bool InstallGuestWorld(bool talkScripts, bool npcLocal, bool waitForSnapshot);
+
+// Gates a session puts on things a player alone can do (mp_gates.cpp, docs §3.39):
+// covenants while talking, a host summoning from Majula; probes for the ship table
+// and Pharros contraptions.
+bool InstallMpGates(bool enabled);
+bool RecentSearchHit();   // an object was "searched" in the last two seconds
+
+// Travelling in a co-op session without leaving it (travel_sync.cpp, docs §3.38).
+bool InstallTravelSync(bool enabled);
+void NoteLocalTravel(int32_t rawMap);      // a travel warp was just taken here
+void NotePartnerRawMap(int32_t rawMap);    // network thread: the map the partner stands in
+void TravelResyncTick();                   // game thread
 void CancelDeathRejoin();             // leaving on purpose: no automatic return
 // Put a sign down again for the host to summon, without the once-per-handshake
 // limit of the automatic join (player_sync.cpp).

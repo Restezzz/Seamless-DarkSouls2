@@ -85,6 +85,20 @@ struct ModConfig {
     // area and participant count, and the guest starts the same battle with the
     // game's own function (docs §3.32). On by default.
     bool boss_sync = true;
+    // A guest's world (docs §3.37): NPC talk scripts asked as for the world's
+    // owner; NPCs run on the guest's machine (they can be talked to and hit); a
+    // joining guest's characters put in once the host's world has arrived, so the
+    // enemies the host killed stay dead. All on by default.
+    bool guest_npc_talk_scripts = true;
+    bool guest_npc_local = true;
+    bool guest_wait_for_snapshot = true;
+    // Travelling in a session (docs §3.38): after either player travels, the
+    // partner's character and the shared enemies are put back once both stand in
+    // the same map. On by default.
+    bool travel_resync = true;
+    // Script and menu gates that keep a host with a guest from doing things alone
+    // players can: joining a covenant, summoning from Majula (docs §3.39).
+    bool mp_gates = true;
     // Damage between the players when this player hosts: "off" (none), "ff"
     // (friendly fire, no lock-on on each other) or "pvp" (the guest counts as an
     // evil spirit: it can be locked on and hit, the enemies leave it alone).

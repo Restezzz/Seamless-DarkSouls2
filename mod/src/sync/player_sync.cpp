@@ -736,6 +736,48 @@ void SendFlagToPeers(uint32_t Id, bool Value) {
 //     during play, so only that direction is sent, and only that direction is
 //     accepted. A transient can then cost nothing worse than a flag that fails
 //     to propagate.
+// The join controller's state (7 in the host's world), -1 with none.
+static int ReadJoinCtrlState() {
+    const uintptr_t ExeB = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+    uintptr_t Net = 0, Mp = 0, Ctrl = 0, Vtbl = 0;
+    int State = -1;
+    if (Memory::Read<uintptr_t>(ExeB + 0x1616CF8, &Net) && Net &&
+        Memory::Read<uintptr_t>(Net + 0x18, &Mp) && Mp &&
+        Memory::Read<uintptr_t>(Mp + 0x40, &Ctrl) && Ctrl &&
+        Memory::Read<uintptr_t>(Ctrl, &Vtbl) && Vtbl == ExeB + 0x10D7BD8) {
+        Memory::Read<int>(Ctrl + 0xF8, &State);
+    }
+    return State;
+}
+
+// While the game swaps whole flag tables -- a guest taking on the host's flags
+// as it joins (the snapshot, join state 4), and getting its own back when it
+// leaves -- the difference between the two tables is not anybody's progress.
+// On 16.09 evening a guest's own flag 105415 went out as "0->1" when it got home
+// and was written into the host's save (20:50:12, "1 changed something here").
+// So nothing is sent while joining, while leaving, while loading, and for five
+// seconds after: the baseline is simply retaken.
+static bool FlagTablesSettling(ULONGLONG Now) {
+    static ULONGLONG s_quietUntil = 0;
+    static int s_lastWorld = -2;
+    const int Join = ReadJoinCtrlState();
+    const uintptr_t ExeB = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+    uintptr_t Gm = 0, Player = 0;
+    const bool Loaded = Memory::Read<uintptr_t>(ExeB + 0x16148F0, &Gm) && Gm &&
+                        Memory::Read<uintptr_t>(Gm + 0xD0, &Player) && Player;
+    const int World = Join == 7 ? 1 : 0;
+    const bool Moving = (Join >= 0 && Join != 7) || !Loaded;
+    if (Moving || World != s_lastWorld) {
+        if (World != s_lastWorld && s_lastWorld != -2) {
+            LOG_INFO("[FLAGSYNC] %s -- flag tables are being swapped, nothing is sent until they settle",
+                     World ? "in the host's world" : "out of the host's world");
+        }
+        s_lastWorld = World;
+        s_quietUntil = Now + 5000;
+    }
+    return Now < s_quietUntil;
+}
+
 void FlagSyncTick() {
     const FlagSyncMode Mode = static_cast<FlagSyncMode>(g_flagSyncMode.load());
     if (Mode == FlagSyncMode::Off) return;
@@ -743,6 +785,7 @@ void FlagSyncTick() {
     const ULONGLONG Now = GetTickCount64();
     if (Now - g_flagLastTick < 1000) return;
     g_flagLastTick = Now;
+    const bool Settling = FlagTablesSettling(Now);
 
     // Flags from the other player, written here -- on the game's own thread,
     // before the capture below, so that capture already contains them and the
@@ -842,6 +885,11 @@ void FlagSyncTick() {
             }
             Current[Group] = g_flagBaseline[Group];
         }
+    }
+
+    if (Settling) {
+        g_flagBaseline = std::move(Current);
+        return;
     }
 
     // Collect first, decide after: a burst far larger than gameplay produces is
@@ -1269,8 +1317,32 @@ static bool IsGuestInHostWorld() {
     }
 }
 
+// The answers of the two seconds after an object was searched (a Pharros
+// contraption a guest can press but that does nothing): what the script asked,
+// what the game would have said and what it got.
+static void LogIsHostAfterSearch(void* Condition, uint64_t Game, uint64_t Given) {
+    static std::atomic<uint32_t> s_lines{ 0 };
+    if (s_lines.fetch_add(1) >= 60) return;
+    uint8_t Expect = 0xFF, Flag = 0xFF;
+    if (Condition) {
+        Memory::Read<uint8_t>(reinterpret_cast<uintptr_t>(Condition) + 0x10, &Expect);
+        Memory::Read<uint8_t>(reinterpret_cast<uintptr_t>(Condition) + 0x11, &Flag);
+    }
+    LOG_INFO("[GATES] IsHost after a search: +0x10 %u, +0x11 %u -- game %llu, given %llu (from exe+0x%llX)",
+             Expect, Flag, static_cast<unsigned long long>(Game & 0xFF), static_cast<unsigned long long>(Given & 0xFF),
+             static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(_ReturnAddress()) -
+                                             reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr))));
+}
+
 static uint64_t __fastcall IsHostDetour(void* Condition) {
-    if (g_scriptHostStub.load() && IsGuestInHostWorld()) return 0;
+    const bool Stub = g_scriptHostStub.load() && IsGuestInHostWorld();
+    if (DS2Coop::Sync::RecentSearchHit()) {
+        const uint64_t Game = g_origIsHost(Condition);
+        const uint64_t Given = Stub ? 0 : Game;
+        LogIsHostAfterSearch(Condition, Game, Given);
+        return Given;
+    }
+    if (Stub) return 0;
     return g_origIsHost(Condition);
 }
 
@@ -3154,6 +3226,15 @@ bool PlayerSync::Initialize() {
     // Damage between the players, as this player last chose it as a host
     // (pvp_modes.cpp). A guest plays by whatever its host sends.
     DS2Coop::Sync::SetDamageMode(SeamlessCoopMod::GetInstance().GetDamageModeSetting());
+    // A guest's world: NPC talk, NPCs run here, characters after the host's world
+    // has arrived (guest_world.cpp); travelling in a session (travel_sync.cpp);
+    // covenant and summon gates for a host with a guest (mp_gates.cpp).
+    {
+        const auto& Cfg = SeamlessCoopMod::GetInstance().GetConfig();
+        DS2Coop::Sync::InstallGuestWorld(Cfg.guest_npc_talk_scripts, Cfg.guest_npc_local, Cfg.guest_wait_for_snapshot);
+        DS2Coop::Sync::InstallTravelSync(Cfg.travel_resync);
+        DS2Coop::Sync::InstallMpGates(Cfg.mp_gates);
+    }
 
     // A guest can talk to NPCs in the host's world (npc_talk.cpp)...
     DS2Coop::Sync::InstallNpcTalk();
