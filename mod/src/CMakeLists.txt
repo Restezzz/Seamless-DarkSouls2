@@ -21,6 +21,7 @@ add_library(ds2_seamless_coop SHARED
     sync/guest_world.cpp
     sync/travel_sync.cpp
     sync/mp_gates.cpp
+    sync/guest_drops.cpp
     utils/logger.cpp
     utils/crash_log.cpp
     utils/memory.cpp

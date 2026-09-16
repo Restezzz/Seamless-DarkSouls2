@@ -112,6 +112,7 @@ void BroadcastReset() {
 
 void __fastcall RestResetDetour(void* A, void* B, void* C, void* D) {
     g_restReset(A, B, C, D);
+    ForgetGuestDropRolls();   // respawned enemies can drop again
     if (!g_enabled.load() || !HavePartner()) return;
     if (!InSharedWorld()) {
         LOG_INFO("[WORLD] rested in my own world while a guest of the lobby -- that is not the host's world, "
@@ -141,6 +142,7 @@ void __fastcall GenUpdateDetour(void* Manager, float* Dt) {
     LootSyncGameTick();
     FreeTravelGameTick();
     DeathSyncGameTick();
+    GuestDropsTick();
     SummonAcceptGameTick();
     PvpModesGameTick();
     ChrDeathTick();

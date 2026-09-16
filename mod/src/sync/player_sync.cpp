@@ -3234,6 +3234,7 @@ bool PlayerSync::Initialize() {
         DS2Coop::Sync::InstallGuestWorld(Cfg.guest_npc_talk_scripts, Cfg.guest_npc_local, Cfg.guest_wait_for_snapshot);
         DS2Coop::Sync::InstallTravelSync(Cfg.travel_resync);
         DS2Coop::Sync::InstallMpGates(Cfg.mp_gates);
+        DS2Coop::Sync::InstallGuestDrops(true);
     }
 
     // A guest can talk to NPCs in the host's world (npc_talk.cpp)...

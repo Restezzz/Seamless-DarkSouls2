@@ -164,6 +164,11 @@ bool GuestBossRewardDue();
 // joining guest's characters put in only once the host's world has arrived.
 bool InstallGuestWorld(bool talkScripts, bool npcLocal, bool waitForSnapshot);
 
+// Enemy drops for a guest from every kill (guest_drops.cpp, docs §3.40).
+bool InstallGuestDrops(bool enabled);
+void GuestDropsTick();          // game thread
+void ForgetGuestDropRolls();    // a rest: every enemy can drop again
+
 // Gates a session puts on things a player alone can do (mp_gates.cpp, docs §3.39):
 // covenants while talking, a host summoning from Majula; probes for the ship table
 // and Pharros contraptions.
