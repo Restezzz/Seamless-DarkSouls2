@@ -6,6 +6,37 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 Каждая версия лежит на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) двумя
 архивами: `Seamless-DS2-<версия>-host.zip` для хоста и `Seamless-DS2-<версия>-joiner.zip` для друзей.
 
+## 0.2.1 — not released yet / ещё не выпущено
+
+Fixes for the 17 problems of the 0.2.0 test. **None of it has been checked in play yet**; this section is rewritten
+from the next test's results before the release.
+Исправления 17 проблем теста 0.2.0. **В игре пока ничего не проверено**; перед релизом раздел переписывается по
+итогам следующего теста.
+
+**Changed / Изменено**
+
+- The host's game crashed after bonfire travel with a guest in the world: the mod switched the shared enemies back on
+  while the old map was still on screen. Now nothing is switched on until the load is over.
+  У хоста вылетала игра после перемещения у костра с гостем в мире: мод снова включал общих мобов, пока на экране
+  была старая карта. Теперь до конца загрузки ничего не включается.
+- NPCs: a map a guest reached on its own runs its scripts (NPCs without the host nearby); a guest's dialogue progress
+  is kept; an item an NPC gives reaches the partner if the partner has none of it.
+  NPC: карта, куда гость пришёл сам, выполняет свои скрипты (NPC без хоста рядом); прогресс разговора гостя
+  сохраняется; предмет от NPC получает и напарник, если у него такого нет.
+- "Get the Estus Flask" in the menu, shown only to a player who has none; never a second flask.
+  «Получить флягу с эстусом» в меню — только тем, у кого её нет; второй фляги не бывает.
+- Friendly fire: lock-on on each other is blocked for real. The death camera goes to the partner only nearby (same
+  map, within 30 m).
+  «Огонь по своим»: наведение друг на друга действительно запрещено. Камера после смерти уходит к напарнику только
+  поблизости (та же карта, до 30 м).
+- A bonfire unlit after travelling back; the way back after a death while the host travels; enemies doubled when both
+  rest; enemy packets from another map; a chest opened at home but not emptied; walls broken in the host's world.
+  Незажжённый костёр после возвращения; возврат после смерти, пока хост перемещается; раздвоенные мобы при отдыхе
+  обоих; пакеты мобов с другой карты; сундук, открытый дома, но не опустошённый; стены, сломанные в мире хоста.
+- Logged for the next test: enemies alive for the guest only, missing drops (crystal lizards, the shade), the stuck
+  travel pose.
+  Пишется в лог для следующего теста: мобы, живые только у гостя, пропавший дроп (ящерицы, тень), зависшая поза.
+
 ## 0.2.0 — 2026-09-17
 
 A snapshot before the next round of fixes, with the results of a two-player test on 17.09 — the full lists are in the
