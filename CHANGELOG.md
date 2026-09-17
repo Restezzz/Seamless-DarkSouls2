@@ -6,36 +6,77 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 Каждая версия лежит на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) двумя
 архивами: `Seamless-DS2-<версия>-host.zip` для хоста и `Seamless-DS2-<версия>-joiner.zip` для друзей.
 
-## 0.2.1 — not released yet / ещё не выпущено
+## 0.2.1 — 2026-09-17
 
-Fixes for the 17 problems of the 0.2.0 test. **None of it has been checked in play yet**; this section is rewritten
-from the next test's results before the release.
-Исправления 17 проблем теста 0.2.0. **В игре пока ничего не проверено**; перед релизом раздел переписывается по
-итогам следующего теста.
+Fixes for the problems of the 0.2.0 test, with the results of a two-player test of this build on 17.09 — the full
+lists are in the [release notes](https://github.com/Restezzz/Seamless-DarkSouls2/releases/tag/v0.2.1).
+Исправления проблем теста 0.2.0, с результатами теста этой сборки вдвоём 17.09 — полные списки в
+[описании релиза](https://github.com/Restezzz/Seamless-DarkSouls2/releases/tag/v0.2.1).
 
-**Changed / Изменено**
+**Started working, checked in play / Начало работать, проверено в игре**
 
-- The host's game crashed after bonfire travel with a guest in the world: the mod switched the shared enemies back on
-  while the old map was still on screen. Now nothing is switched on until the load is over.
-  У хоста вылетала игра после перемещения у костра с гостем в мире: мод снова включал общих мобов, пока на экране
-  была старая карта. Теперь до конца загрузки ничего не включается.
-- NPCs: a map a guest reached on its own runs its scripts (NPCs without the host nearby); a guest's dialogue progress
-  is kept; an item an NPC gives reaches the partner if the partner has none of it.
-  NPC: карта, куда гость пришёл сам, выполняет свои скрипты (NPC без хоста рядом); прогресс разговора гостя
-  сохраняется; предмет от NPC получает и напарник, если у него такого нет.
-- "Get the Estus Flask" in the menu, shown only to a player who has none; never a second flask.
-  «Получить флягу с эстусом» в меню — только тем, у кого её нет; второй фляги не бывает.
-- Friendly fire: lock-on on each other is blocked for real. The death camera goes to the partner only nearby (same
-  map, within 30 m).
-  «Огонь по своим»: наведение друг на друга действительно запрещено. Камера после смерти уходит к напарнику только
-  поблизости (та же карта, до 30 м).
-- A bonfire unlit after travelling back; the way back after a death while the host travels; enemies doubled when both
-  rest; enemy packets from another map; a chest opened at home but not emptied; walls broken in the host's world.
-  Незажжённый костёр после возвращения; возврат после смерти, пока хост перемещается; раздвоенные мобы при отдыхе
-  обоих; пакеты мобов с другой карты; сундук, открытый дома, но не опустошённый; стены, сломанные в мире хоста.
-- Logged for the next test: enemies alive for the guest only, missing drops (crystal lizards, the shade), the stuck
-  travel pose.
-  Пишется в лог для следующего теста: мобы, живые только у гостя, пропавший дроп (ящерицы, тень), зависшая поза.
+- Bonfire travel with a guest in the world does not crash the host's game; both travelling at nearly the same moment
+  neither crashes the host nor throws the guest out; a bonfire the guest comes back to is lit and can be rested at.
+  Перемещение у костра с гостем в мире не роняет игру хоста; когда оба перемещаются почти одновременно, у хоста не
+  вылетает и гостя не выкидывает; костёр, к которому гость вернулся, зажжён, у него можно сесть.
+- A guest who dies while the host travels is still brought back (the game first reports a disconnect from the
+  multiplayer session, then the sign is placed again and the guest is summoned).
+  Погибшего гостя возвращает, даже если хост в это время перемещается (сначала игра пишет об отключении от
+  многопользовательской сессии, потом знак ставится заново и гостя призывает).
+- NPCs are visible and can be talked to where a guest came without the host.
+  NPC видны и доступны для разговора там, куда гость пришёл без хоста.
+- New: Menu → "Get the Estus Flask" for a player without one; an upgraded flask stays single and keeps its level.
+  Новое: Меню → «Получить флягу с эстусом» у того, у кого её нет; улучшенная фляга остаётся одна и не теряет уровень.
+- Enemies: not doubled and no second souls when both rest at once; no extra or revived enemies when the players meet
+  again after being apart. The drop of crystal lizards and the shade reaches the guest — but not fully.
+  Мобы: не раздваиваются и не дают души второй раз, когда оба отдыхают; нет лишних и оживших, когда игроки снова
+  сходятся. Дроп кристальных ящериц и тени доходит до гостя — но не полностью.
+- A chest the guest opened at home without taking the item has the item in the host's world, and once taken it is
+  empty at home too.
+  Сундук, который гость открыл у себя и не забрал предмет, в мире хоста с предметом, а после того как гость его забрал,
+  пуст и дома.
+- Also checked: PvP lock-on as before, the death camera on a partner nearby, the connection check (seems fine) and its
+  copied report in Russian.
+  Также проверено: наведение в PvP как раньше, камера на напарнике рядом, проверка связи (вроде в порядке) и её
+  скопированный отчёт на русском.
+- Not a mod issue: resting does not bring back barrels and boxes in the game itself either.
+  Не проблема мода: отдых не восстанавливает бочки и ящики и в самой игре.
+
+**Did not work / Не заработало**
+
+- Enemies the host killed are alive for a guest who joins after that, every time, until someone rests at a bonfire.
+  Мобы, убитые хостом, живы у зашедшего после этого гостя — каждый раз, пока кто-нибудь не посидит у костра.
+- NPCs: dialogue progress (the Emerald Herald), NPC items for the partner, and a ring handed out many times; the
+  blacksmith back behind his door for the guest.
+  NPC: прогресс диалогов (Хранительница Огня), предметы от NPC напарнику, перстень, выданный много раз; кузнец у гостя
+  снова за дверью.
+- Friendly fire still allows lock-on; the camera after a death far from the partner stays put and should go to the
+  partner.
+  «Огонь по своим» всё ещё даёт наводиться; камера после смерти вдали от напарника остаётся на месте, а нужна на
+  напарнике.
+
+**New problems / Новые проблемы**
+
+- Old chests the host opened long ago cannot be opened by the guest; a chest the host opened before the guest came is
+  empty for the guest in the host's world.
+  Старые сундуки, давно открытые у хоста, гость не открывает; сундук, открытый хостом до прихода гостя, у гостя в мире
+  хоста пуст.
+- A killed boss shows the guest a fog wall and the boss; the host dies and the guest kills the boss — no end, no reward.
+  У убитого босса гость видит туман и босса; хост погиб, гость добил босса — бой не кончается, награды нет.
+- The host dying in another area than the guest: the camera hangs until the guest comes there. Joining the host near
+  the Cathedral of Blue bonfire or while the host crosses into another area throws the guest out.
+  Хост погибает не в той локации, где гость: камера висит, пока гость туда не придёт. Вход к хосту у костра «Синий
+  собор» или пока хост переходит в другую локацию выкидывает гостя.
+- NPCs hit a few times by the guest stop talking to the guest; red phantoms and others look human; the guest cannot
+  open doors in the host's world with a key; a snake killed in the host's world dropped its item in the guest's world
+  too.
+  NPC после нескольких ударов гостя с ним не разговаривают; красные фантомы и остальные выглядят как люди; гость не
+  открывает ключом двери в мире хоста; змейка, убитая в мире хоста, выронила дроп и в мире гостя.
+
+**Not checked / Не проверено**
+
+- A wall an enemy blows up in the host's world, in the guest's own world.
+  Стена, которую в мире хоста взрывает моб, — в собственном мире гостя.
 
 ## 0.2.0 — 2026-09-17
 

@@ -7,7 +7,7 @@ A pathetic attempt at LukeYui imitation
 Бесшовный кооператив для Dark Souls 2</h3>
 
 <p align="center">
-version <b>0.2.0</b> ·
+version <b>0.2.1</b> ·
 <a href="https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest"><b>Download / Скачать</b></a> ·
 <a href="https://restezzz.github.io/Seamless-DarkSouls2/">Website / Сайт</a><br>
 English on the left · Русский справа
@@ -136,8 +136,8 @@ It is an early version, played by two people so far. See **Known issues** below.
 Open the **[latest release](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
 and take one archive:
 
-- **the host** (the player friends join): `Seamless-DS2-0.2.0-host.zip`
-- **friends**: `Seamless-DS2-0.2.0-joiner.zip`
+- **the host** (the player friends join): `Seamless-DS2-0.2.1-host.zip`
+- **friends**: `Seamless-DS2-0.2.1-joiner.zip`
 
 Older versions are on the [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases)
 page. Updating: extract the new archive over the old files.
@@ -158,8 +158,8 @@ page. Updating: extract the new archive over the old files.
 Открой **[последний релиз](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
 и возьми один архив:
 
-- **хосту** (к нему подключаются друзья): `Seamless-DS2-0.2.0-host.zip`
-- **друзьям**: `Seamless-DS2-0.2.0-joiner.zip`
+- **хосту** (к нему подключаются друзья): `Seamless-DS2-0.2.1-host.zip`
+- **друзьям**: `Seamless-DS2-0.2.1-joiner.zip`
 
 Прошлые версии — на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases).
 Обновление: распаковать новый архив поверх старых файлов.
@@ -177,7 +177,7 @@ page. Updating: extract the new archive over the old files.
 2. Open the game folder: Steam → right-click Dark Souls II → **Manage → Browse local files**.
    It's `...\steamapps\common\Dark Souls II Scholar of the First Sin\Game\`, the folder with
    `DarkSoulsII.exe`.
-3. Extract **`Seamless-DS2-0.2.0-host.zip`** into it (replace `dinput8.dll` if asked).
+3. Extract **`Seamless-DS2-0.2.1-host.zip`** into it (replace `dinput8.dll` if asked).
 4. Run **`StartServer.bat`**. The first time Windows may ask about the firewall — allow it.
    The window shows **your address for friends** (26.x.x.x) and where the key file
    `ds2_server_public.key` is (in the game folder).
@@ -193,7 +193,7 @@ page. Updating: extract the new archive over the old files.
 2. Открой папку игры: Steam → правый клик по Dark Souls II → **Управление → Просмотреть
    локальные файлы**. Это `...\steamapps\common\Dark Souls II Scholar of the First Sin\Game\`,
    там лежит `DarkSoulsII.exe`.
-3. Распакуй туда **`Seamless-DS2-0.2.0-host.zip`** (если спросит — заменить `dinput8.dll`).
+3. Распакуй туда **`Seamless-DS2-0.2.1-host.zip`** (если спросит — заменить `dinput8.dll`).
 4. Запусти **`StartServer.bat`**. В первый раз Windows может спросить про брандмауэр —
    разреши. Окно покажет **адрес для друзей** (26.x.x.x) и где лежит файл-ключ
    `ds2_server_public.key` (в папке игры).
@@ -208,7 +208,7 @@ page. Updating: extract the new archive over the old files.
 ## Friend: setting up (once)
 
 1. Install Radmin VPN and join the host's network (**Network → Join network**).
-2. Extract **`Seamless-DS2-0.2.0-joiner.zip`** into your game folder (same place as above).
+2. Extract **`Seamless-DS2-0.2.1-joiner.zip`** into your game folder (same place as above).
 3. Put the host's **`ds2_server_public.key`** into the same folder.
 4. Open **`ds2_seamless_coop.ini`** in Notepad and write the host's address after
    `server_ip=`, for example `server_ip=26.12.34.56`. Save.
@@ -219,7 +219,7 @@ page. Updating: extract the new archive over the old files.
 ## Друг: настройка (один раз)
 
 1. Поставь Radmin VPN и войди в сеть хоста (**Сеть → Присоединиться к сети**).
-2. Распакуй **`Seamless-DS2-0.2.0-joiner.zip`** в свою папку игры (туда же, что и выше).
+2. Распакуй **`Seamless-DS2-0.2.1-joiner.zip`** в свою папку игры (туда же, что и выше).
 3. Положи в ту же папку **`ds2_server_public.key`** от хоста.
 4. Открой **`ds2_seamless_coop.ini`** Блокнотом и впиши адрес хоста после `server_ip=`,
    например `server_ip=26.12.34.56`. Сохрани.
@@ -316,6 +316,7 @@ the menu key are easier to change in the menu itself.
 | `npc_spawn` | `false` | an old experiment with the guest's NPCs (Delete flips it) |
 | `boss_fog_wait` | `false` | make the boss fog hold a guest back until the other player is inside |
 | `npc_talk` | `true` | a guest can talk to NPCs in the host's world |
+| `npc_progress` | `true` | dialogue progress and NPC items for both players (not working yet, see Known issues) |
 | `damage_mode` | `off` | damage between players when you host: `off`, `ff` (friendly fire), `pvp` — easier in the lobby menu |
 | `allow_invasions` | `false` | invasions |
 | `language` | `auto` | `auto`, `en` or `ru` |
@@ -343,6 +344,7 @@ the menu key are easier to change in the menu itself.
 | `npc_spawn` | `false` | старый эксперимент с NPC у гостя (переключается Delete) |
 | `boss_fog_wait` | `false` | заставить туман босса держать гостя, пока не зайдёт второй |
 | `npc_talk` | `true` | гость может говорить с NPC в мире хоста |
+| `npc_progress` | `true` | общий прогресс разговоров и предметы от NPC (пока не работает, см. «Известные проблемы») |
 | `damage_mode` | `off` | урон между игроками, когда ты хост: `off`, `ff` (огонь по своим), `pvp` — проще в меню лобби |
 | `allow_invasions` | `false` | вторжения |
 | `language` | `auto` | `auto`, `en` или `ru` |
@@ -363,7 +365,7 @@ the menu key are easier to change in the menu itself.
   host, or `server_ip` is wrong.
 - **Nobody gets summoned.** Don't sit at a bonfire; check the lobby password.
 - **Thrown out a minute or two after joining, or never summoned.** Menu → Lobby → **Check the
-  connection** (in a lobby, with both players on 0.2.0) and send the copied report. A VPN or a
+  connection** (in a lobby, with both players on 0.2.1) and send the copied report. A VPN or a
   proxy in TUN mode on either computer is the usual suspect: put Radmin VPN and `DarkSoulsII.exe`
   into its exceptions.
 - **An NPC offers no "Talk".** Walk away from the NPC and come back.
@@ -372,26 +374,36 @@ the menu key are easier to change in the menu itself.
   of the player whose game crashed.
 - **Removing the mod.** Delete `dinput8.dll` from the game folder.
 
-## Known issues (0.2.0)
+## Known issues (0.2.1)
 
-Found in a two-player test on 17.09; the full list is in the
-[0.2.0 release notes](https://github.com/Restezzz/Seamless-DarkSouls2/releases/tag/v0.2.0).
+Found in a two-player test of 0.2.1 on 17.09; the full list, with what started working, is in
+the [0.2.1 release notes](https://github.com/Restezzz/Seamless-DarkSouls2/releases/tag/v0.2.1).
 
-- NPCs in the host's world are visible and can be talked to by a guest only while the host is in
-  the same area.
-- NPC dialogue progress is not shared: for a guest an NPC keeps repeating its first line, so the
-  Emerald Herald never gets to leveling up. **Take the Estus Flask from the Herald in your own
-  world:** a guest who tried in the host's world did not get it and could no longer get it at home.
-- Both players travelling by bonfire at nearly the same moment throws the guest out (once the
-  host's game crashed). Coming back from another bonfire can leave the character stuck in the
-  travel pose, with that bonfire shown unlit.
-- Crystal lizards and the shade at the Forest of Fallen Giants' second bonfire gave their drop
-  only to the host.
-- Rare: an enemy dead at the host's stays alive for the guest until its drop is picked up; after
-  a rest some enemies appear twice. Resting does not bring back barrels and boxes.
-- Friendly fire lets players lock on to each other; the guest gets no notice when the host
-  changes the damage mode.
-- A wall an enemy blows up in the host's world stays closed in the guest's own world.
+- Enemies the host has killed are alive for a guest who joins after that — every time the guest
+  comes back into the host's world; they match only after one of the players rests at a bonfire.
+- NPCs: dialogue progress is still not shared (the Emerald Herald does not move on for a guest in
+  the host's world); for the guest the blacksmith was back outside his door asking for the key,
+  while at the host's he has long been inside. An item an NPC gives one player does not reach the
+  other (the guest did not get the Bell Keepers' ring even after joining the covenant at the NPC),
+  and an NPC handed the guest the same ring many times over, repeating its lines. After a few hits
+  from the guest an NPC no longer talks to the guest. **No Estus Flask?** Menu → **Get the Estus
+  Flask**.
+- Chests: the guest cannot open old chests the host opened long ago; a chest the host opened
+  before the guest joined is empty for the guest in the host's world, though the guest never
+  looted it at home.
+- Bosses: at a boss already killed the guest saw a fog wall and the boss still standing (the host
+  saw no fog); if the host dies and the guest kills the boss, the fight does not end and there is
+  no reward.
+- The host died in one area while the guest was in another: the host's camera hung at the place
+  of death and nothing happened until the guest travelled to that area.
+- Joining the host near the Cathedral of Blue bonfire disconnected the guest right after joining,
+  again and again, until the host went to another area. Joining while the host is crossing from
+  one area into another sends the guest back to their own world.
+- Friendly fire still lets players lock on to each other. After a death far from the partner the
+  camera stays at the place of death (it should go to the partner).
+- Red phantoms and others look human too. The guest can no longer open a door in the host's world
+  with a key, though the key is in the inventory. A snake killed in the host's world also dropped
+  its item in the guest's own world, where it should be dead.
 
 </td>
 <td valign="top">
@@ -402,7 +414,7 @@ Found in a two-player test on 17.09; the full list is in the
   подключён Radmin, нет файла-ключа или он от другого хоста, либо неверный `server_ip`.
 - **Никого не призывает.** Не сиди у костра; проверь пароль лобби.
 - **Выкидывает через минуту-две после входа или не призывает вовсе.** Меню → Лобби → **Проверка
-  связи** (в лобби, у обоих 0.2.0) и пришли скопированный отчёт. Обычный подозреваемый — VPN
+  связи** (в лобби, у обоих 0.2.1) и пришли скопированный отчёт. Обычный подозреваемый — VPN
   или прокси в режиме TUN на одном из компьютеров: добавь Radmin VPN и `DarkSoulsII.exe` в его
   исключения.
 - **NPC не предлагает «Поговорить».** Отойди от NPC и подойди снова.
@@ -411,24 +423,33 @@ Found in a two-player test on 17.09; the full list is in the
   у кого вылетело.
 - **Удалить мод.** Удалить `dinput8.dll` из папки игры.
 
-## Известные проблемы (0.2.0)
+## Известные проблемы (0.2.1)
 
-Найдены в тесте вдвоём 17.09; полный список — в
-[описании релиза 0.2.0](https://github.com/Restezzz/Seamless-DarkSouls2/releases/tag/v0.2.0).
+Найдены в тесте 0.2.1 вдвоём 17.09; полный список и то, что начало работать, — в
+[описании релиза 0.2.1](https://github.com/Restezzz/Seamless-DarkSouls2/releases/tag/v0.2.1).
 
-- NPC в мире хоста видны гостю и доступны для разговора, только пока хост в той же локации.
-- Прогресс диалогов не общий: у гостя NPC повторяет первую фразу по кругу, поэтому у Хранительницы
-  Огня не дойти до прокачки. **Флягу с эстусом берите у Хранительницы в своём мире:** гость,
-  попробовавший в мире хоста, её не получил и дома получить уже не смог.
-- Если оба перемещаются у костра почти одновременно, гостя выкидывает (однажды у хоста вылетела
-  игра). После перемещения на другой костёр и обратно персонаж может застрять в позе
-  перемещения, а сам костёр показан незажжённым.
-- Кристальные ящерицы и тень у второго костра в Лесу Павших Гигантов дали дроп только хосту.
-- Редко: моб, мёртвый у хоста, у гостя остаётся живым, пока тот не подберёт его дроп; после
-  отдыха часть мобов появляется дважды. Отдых не возвращает бочки и ящики.
-- «Огонь по своим» даёт наводиться друг на друга; гость не получает уведомления, когда хост меняет
-  режим урона.
-- Стена, которую в мире хоста взрывает моб, в собственном мире гостя остаётся закрытой.
+- Мобы, которых хост убил, живы у гостя, зашедшего после этого, — каждый раз, когда гость снова
+  заходит в мир хоста; совпадают, только когда кто-то из двоих посидит у костра.
+- NPC: прогресс диалогов по-прежнему не общий (Хранительница Огня у гостя в мире хоста не идёт
+  дальше); кузнец у гостя оказался снова за дверью и просит ключ, хотя у хоста он давно внутри.
+  Предмет, который NPC дал одному игроку, второму не приходит (перстень звонаря гость не получил,
+  даже когда сам поговорил с NPC и вступил в ковенант), а перстень стража NPC выдал гостю много
+  раз, повторяя фразы. После нескольких ударов гостя NPC с ним больше не разговаривает. **Нет
+  фляги с эстусом?** Меню → **Получить флягу с эстусом**.
+- Сундуки: старые сундуки, давно открытые у хоста, гость открыть не может; сундук, который хост
+  открыл до прихода гостя, у гостя в мире хоста пустой, хотя у себя гость его не лутал.
+- Боссы: у уже убитого босса гость видел туман и самого босса (у хоста тумана нет); если хост
+  погиб, а гость добил босса, бой не завершается и награды нет.
+- Хост погиб в одной локации, гость был в другой: у хоста камера зависла на месте смерти и ничего
+  не происходило, пока гость не переместился в ту локацию.
+- Вход к хосту у костра «Синий собор» отключал гостя сразу после присоединения, раз за разом, пока
+  хост не ушёл в другую локацию. Вход, пока хост переходит из одной локации в другую, возвращает
+  гостя в свой мир.
+- «Огонь по своим» всё ещё даёт наводиться друг на друга. После смерти вдали от напарника камера
+  остаётся на месте смерти (нужна на напарнике).
+- Красные фантомы и остальные тоже выглядят как люди. Дверь в мире хоста гость теперь не может
+  открыть ключом, хотя ключ в инвентаре. Змейка, убитая в мире хоста, выронила дроп ещё и в
+  собственном мире гостя, где должна быть мёртвой.
 
 </td>
 </tr>
