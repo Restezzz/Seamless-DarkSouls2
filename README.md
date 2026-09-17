@@ -7,7 +7,7 @@ A pathetic attempt at LukeYui imitation
 Бесшовный кооператив для Dark Souls 2</h3>
 
 <p align="center">
-version <b>0.1.3</b> ·
+version <b>0.2.0</b> ·
 <a href="https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest"><b>Download / Скачать</b></a> ·
 <a href="https://restezzz.github.io/Seamless-DarkSouls2/">Website / Сайт</a><br>
 English on the left · Русский справа
@@ -136,8 +136,8 @@ It is an early version, played by two people so far. See **Known issues** below.
 Open the **[latest release](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
 and take one archive:
 
-- **the host** (the player friends join): `Seamless-DS2-0.1.3-host.zip`
-- **friends**: `Seamless-DS2-0.1.3-joiner.zip`
+- **the host** (the player friends join): `Seamless-DS2-0.2.0-host.zip`
+- **friends**: `Seamless-DS2-0.2.0-joiner.zip`
 
 Older versions are on the [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases)
 page. Updating: extract the new archive over the old files.
@@ -158,8 +158,8 @@ page. Updating: extract the new archive over the old files.
 Открой **[последний релиз](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
 и возьми один архив:
 
-- **хосту** (к нему подключаются друзья): `Seamless-DS2-0.1.3-host.zip`
-- **друзьям**: `Seamless-DS2-0.1.3-joiner.zip`
+- **хосту** (к нему подключаются друзья): `Seamless-DS2-0.2.0-host.zip`
+- **друзьям**: `Seamless-DS2-0.2.0-joiner.zip`
 
 Прошлые версии — на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases).
 Обновление: распаковать новый архив поверх старых файлов.
@@ -177,7 +177,7 @@ page. Updating: extract the new archive over the old files.
 2. Open the game folder: Steam → right-click Dark Souls II → **Manage → Browse local files**.
    It's `...\steamapps\common\Dark Souls II Scholar of the First Sin\Game\`, the folder with
    `DarkSoulsII.exe`.
-3. Extract **`Seamless-DS2-0.1.3-host.zip`** into it (replace `dinput8.dll` if asked).
+3. Extract **`Seamless-DS2-0.2.0-host.zip`** into it (replace `dinput8.dll` if asked).
 4. Run **`StartServer.bat`**. The first time Windows may ask about the firewall — allow it.
    The window shows **your address for friends** (26.x.x.x) and where the key file
    `ds2_server_public.key` is (in the game folder).
@@ -193,7 +193,7 @@ page. Updating: extract the new archive over the old files.
 2. Открой папку игры: Steam → правый клик по Dark Souls II → **Управление → Просмотреть
    локальные файлы**. Это `...\steamapps\common\Dark Souls II Scholar of the First Sin\Game\`,
    там лежит `DarkSoulsII.exe`.
-3. Распакуй туда **`Seamless-DS2-0.1.3-host.zip`** (если спросит — заменить `dinput8.dll`).
+3. Распакуй туда **`Seamless-DS2-0.2.0-host.zip`** (если спросит — заменить `dinput8.dll`).
 4. Запусти **`StartServer.bat`**. В первый раз Windows может спросить про брандмауэр —
    разреши. Окно покажет **адрес для друзей** (26.x.x.x) и где лежит файл-ключ
    `ds2_server_public.key` (в папке игры).
@@ -208,7 +208,7 @@ page. Updating: extract the new archive over the old files.
 ## Friend: setting up (once)
 
 1. Install Radmin VPN and join the host's network (**Network → Join network**).
-2. Extract **`Seamless-DS2-0.1.3-joiner.zip`** into your game folder (same place as above).
+2. Extract **`Seamless-DS2-0.2.0-joiner.zip`** into your game folder (same place as above).
 3. Put the host's **`ds2_server_public.key`** into the same folder.
 4. Open **`ds2_seamless_coop.ini`** in Notepad and write the host's address after
    `server_ip=`, for example `server_ip=26.12.34.56`. Save.
@@ -219,7 +219,7 @@ page. Updating: extract the new archive over the old files.
 ## Друг: настройка (один раз)
 
 1. Поставь Radmin VPN и войди в сеть хоста (**Сеть → Присоединиться к сети**).
-2. Распакуй **`Seamless-DS2-0.1.3-joiner.zip`** в свою папку игры (туда же, что и выше).
+2. Распакуй **`Seamless-DS2-0.2.0-joiner.zip`** в свою папку игры (туда же, что и выше).
 3. Положи в ту же папку **`ds2_server_public.key`** от хоста.
 4. Открой **`ds2_seamless_coop.ini`** Блокнотом и впиши адрес хоста после `server_ip=`,
    например `server_ip=26.12.34.56`. Сохрани.
@@ -313,12 +313,14 @@ the menu key are easier to change in the menu itself.
 | `loot_sync` | `true` | the guest's loot in the host's world |
 | `free_travel` | `true` | no co-op fog between areas |
 | `death_respawn` | `true` | a guest who dies comes back |
-| `npc_spawn` | `true` | a guest's world finishes putting its NPCs in (Delete flips it) |
+| `npc_spawn` | `false` | an old experiment with the guest's NPCs (Delete flips it) |
 | `boss_fog_wait` | `false` | make the boss fog hold a guest back until the other player is inside |
-| `npc_talk` | `false` | force the "Talk" prompt open for a guest (suspected in a crash) |
+| `npc_talk` | `true` | a guest can talk to NPCs in the host's world |
+| `damage_mode` | `off` | damage between players when you host: `off`, `ff` (friendly fire), `pvp` — easier in the lobby menu |
 | `allow_invasions` | `false` | invasions |
 | `language` | `auto` | `auto`, `en` or `ru` |
 | `menu_key` | `F1` | the menu key |
+| `menu_size` | `100` | menu size in percent of what suits the screen (Settings: 85–150) |
 | `debug_logging` | `true` | full log for bug reports |
 
 </td>
@@ -338,12 +340,14 @@ the menu key are easier to change in the menu itself.
 | `loot_sync` | `true` | добыча гостя в мире хоста |
 | `free_travel` | `true` | нет кооп-тумана между локациями |
 | `death_respawn` | `true` | погибший гость возвращается |
-| `npc_spawn` | `true` | мир гостя досоздаёт в нём NPC (переключается Delete) |
+| `npc_spawn` | `false` | старый эксперимент с NPC у гостя (переключается Delete) |
 | `boss_fog_wait` | `false` | заставить туман босса держать гостя, пока не зайдёт второй |
-| `npc_talk` | `false` | принудительно открывать гостю подсказку «Поговорить» (подозревается в вылете) |
+| `npc_talk` | `true` | гость может говорить с NPC в мире хоста |
+| `damage_mode` | `off` | урон между игроками, когда ты хост: `off`, `ff` (огонь по своим), `pvp` — проще в меню лобби |
 | `allow_invasions` | `false` | вторжения |
 | `language` | `auto` | `auto`, `en` или `ru` |
 | `menu_key` | `F1` | клавиша меню |
+| `menu_size` | `100` | размер меню в процентах от подходящего экрану (Настройки: 85–150) |
 | `debug_logging` | `true` | подробный лог для отчётов |
 
 </td>
@@ -358,22 +362,36 @@ the menu key are easier to change in the menu itself.
   before the game), Radmin isn't connected, the key file is missing or comes from another
   host, or `server_ip` is wrong.
 - **Nobody gets summoned.** Don't sit at a bonfire; check the lobby password.
+- **Thrown out a minute or two after joining, or never summoned.** Menu → Lobby → **Check the
+  connection** (in a lobby, with both players on 0.2.0) and send the copied report. A VPN or a
+  proxy in TUN mode on either computer is the usual suspect: put Radmin VPN and `DarkSoulsII.exe`
+  into its exceptions.
 - **An NPC offers no "Talk".** Walk away from the NPC and come back.
 - **A crash or a bug.** Open an [issue](https://github.com/Restezzz/Seamless-DarkSouls2/issues)
   and attach `ds2_seamless_coop.log` and any `ds2_seamless_crash_*.dmp` from the game folder
   of the player whose game crashed.
 - **Removing the mod.** Delete `dinput8.dll` from the game folder.
 
-## Known issues (0.1.3)
+## Known issues (0.2.0)
 
-- NPCs are missing or see-through for the guest: they are never put into the world it joined.
-  Forcing the "Talk" prompt is off (`npc_talk`) — it never produced a prompt, and a crash came
-  out of that same prompt code.
-- The host's bonfires are sent into the guest's travel list now; whether the list shows them
-  is still being tested.
-- A boss only wakes for the host: a guest who walks into the fog first finds it standing idle.
-- NPC dialogue and shop progress may not stick for the guest.
-- The host sees the guest as a white phantom.
+Found in a two-player test on 17.09; the full list is in the
+[0.2.0 release notes](https://github.com/Restezzz/Seamless-DarkSouls2/releases/tag/v0.2.0).
+
+- NPCs in the host's world are visible and can be talked to by a guest only while the host is in
+  the same area.
+- NPC dialogue progress is not shared: for a guest an NPC keeps repeating its first line, so the
+  Emerald Herald never gets to leveling up. **Take the Estus Flask from the Herald in your own
+  world:** a guest who tried in the host's world did not get it and could no longer get it at home.
+- Both players travelling by bonfire at nearly the same moment throws the guest out (once the
+  host's game crashed). Coming back from another bonfire can leave the character stuck in the
+  travel pose, with that bonfire shown unlit.
+- Crystal lizards and the shade at the Forest of Fallen Giants' second bonfire gave their drop
+  only to the host.
+- Rare: an enemy dead at the host's stays alive for the guest until its drop is picked up; after
+  a rest some enemies appear twice. Resting does not bring back barrels and boxes.
+- Friendly fire lets players lock on to each other; the guest gets no notice when the host
+  changes the damage mode.
+- A wall an enemy blows up in the host's world stays closed in the guest's own world.
 
 </td>
 <td valign="top">
@@ -383,22 +401,34 @@ the menu key are easier to change in the menu itself.
 - **Игра пишет «не в сети».** У хоста не запущен сервер (`StartServer.bat` — до игры), не
   подключён Radmin, нет файла-ключа или он от другого хоста, либо неверный `server_ip`.
 - **Никого не призывает.** Не сиди у костра; проверь пароль лобби.
+- **Выкидывает через минуту-две после входа или не призывает вовсе.** Меню → Лобби → **Проверка
+  связи** (в лобби, у обоих 0.2.0) и пришли скопированный отчёт. Обычный подозреваемый — VPN
+  или прокси в режиме TUN на одном из компьютеров: добавь Radmin VPN и `DarkSoulsII.exe` в его
+  исключения.
 - **NPC не предлагает «Поговорить».** Отойди от NPC и подойди снова.
 - **Вылет или ошибка.** Создай [issue](https://github.com/Restezzz/Seamless-DarkSouls2/issues)
   и приложи `ds2_seamless_coop.log` и файлы `ds2_seamless_crash_*.dmp` из папки игры того,
   у кого вылетело.
 - **Удалить мод.** Удалить `dinput8.dll` из папки игры.
 
-## Известные проблемы (0.1.3)
+## Известные проблемы (0.2.0)
 
-- У гостя NPC отсутствуют или прозрачны: их вообще не создают в мире, куда он вошёл.
-  Принудительная подсказка «Поговорить» выключена (`npc_talk`) — она ни разу не появилась,
-  а из этого же кода подсказок пришёл вылет.
-- Костры хоста теперь отправляются в список перемещения гостя; показывает ли их список,
-  ещё проверяется.
-- Босс просыпается только на хоста: гость, зашедший в туман первым, найдёт его в стойке.
-- Прогресс диалогов и магазинов у NPC может не сохраняться у гостя.
-- Хост видит гостя белым фантомом.
+Найдены в тесте вдвоём 17.09; полный список — в
+[описании релиза 0.2.0](https://github.com/Restezzz/Seamless-DarkSouls2/releases/tag/v0.2.0).
+
+- NPC в мире хоста видны гостю и доступны для разговора, только пока хост в той же локации.
+- Прогресс диалогов не общий: у гостя NPC повторяет первую фразу по кругу, поэтому у Хранительницы
+  Огня не дойти до прокачки. **Флягу с эстусом берите у Хранительницы в своём мире:** гость,
+  попробовавший в мире хоста, её не получил и дома получить уже не смог.
+- Если оба перемещаются у костра почти одновременно, гостя выкидывает (однажды у хоста вылетела
+  игра). После перемещения на другой костёр и обратно персонаж может застрять в позе
+  перемещения, а сам костёр показан незажжённым.
+- Кристальные ящерицы и тень у второго костра в Лесу Павших Гигантов дали дроп только хосту.
+- Редко: моб, мёртвый у хоста, у гостя остаётся живым, пока тот не подберёт его дроп; после
+  отдыха часть мобов появляется дважды. Отдых не возвращает бочки и ящики.
+- «Огонь по своим» даёт наводиться друг на друга; гость не получает уведомления, когда хост меняет
+  режим урона.
+- Стена, которую в мире хоста взрывает моб, в собственном мире гостя остаётся закрытой.
 
 </td>
 </tr>

@@ -6,6 +6,52 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 Каждая версия лежит на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) двумя
 архивами: `Seamless-DS2-<версия>-host.zip` для хоста и `Seamless-DS2-<версия>-joiner.zip` для друзей.
 
+## 0.2.0 — 2026-09-17
+
+A snapshot before the next round of fixes, with the results of a two-player test on 17.09 — the full lists are in the
+[release notes](https://github.com/Restezzz/Seamless-DarkSouls2/releases/tag/v0.2.0).
+Снимок перед следующим кругом исправлений, с результатами теста вдвоём 17.09 — полные списки в
+[описании релиза](https://github.com/Restezzz/Seamless-DarkSouls2/releases/tag/v0.2.0).
+
+**Works, checked in play / Работает, проверено в игре**
+
+- Bosses for a guest: souls, the reward item, the bar gone after the kill, staying in the host's world after the win.
+  Боссы для гостя: души, награда, полоска пропадает после убийства, гость остаётся в мире хоста после победы.
+- A guest travels by bonfire on its own in the host's world; players on different maps meet again without crashes.
+  Гость сам перемещается у костра в мире хоста; игроки на разных картах снова сходятся без вылетов.
+- A guest talks to NPCs in the host's world (while the host is in the same area), uses Pharros lockstones, and gets
+  drops from ordinary enemies; covenants and summoning from Majula work for a host with a guest.
+  Гость говорит с NPC в мире хоста (пока хост в той же локации), вставляет камни Фарроса и получает дроп с обычных
+  мобов; ковенанты и призыв из Маджулы работают у хоста с гостем.
+- The guest's world: enemies the host killed stay dead, the petrified statue matches, shortcuts opened by hand and
+  emptied chests carry over.
+  Мир гостя: убитые хостом мобы мертвы, окаменевшая статуя совпадает, шорткаты, открытые руками, и опустошённые
+  сундуки переносятся.
+- New: damage between players (none / friendly fire / PvP, chosen by the host); the menu sized for the screen with a
+  Menu size setting; a guest can no longer withdraw its own sign by touching it.
+  Новое: урон между игроками (без урона / огонь по своим / PvP, выбирает хост); меню по размеру экрана и настройка
+  «Размер меню»; гость больше не снимает свой знак касанием.
+
+**New, not checked yet / Новое, ещё не проверено**
+
+- A connection check in the menu and a warning when the game stops hearing from the server.
+  Проверка связи в меню и предупреждение, если игра перестала слышать сервер.
+
+**Known issues / Известные проблемы**
+
+- NPCs only with the host in the same area; dialogue progress and NPC gifts not shared (the Emerald Herald repeats her
+  first line for a guest; take the Estus Flask in your own world).
+  NPC только при хосте в той же локации; прогресс диалогов и подарки NPC не общие (Хранительница Огня повторяет гостю
+  первую фразу; флягу берите в своём мире).
+- Simultaneous bonfire travel throws the guest out (once crashed the host); a stuck travel pose after coming back.
+  Одновременное перемещение выкидывает гостя (однажды у хоста вылетела игра); застрявшая поза после возвращения.
+- Crystal lizards and the Forest of Fallen Giants shade drop only for the host; rare desynced or doubled enemies;
+  resting does not bring back breakables; walls blown up by enemies do not carry over.
+  Кристальные ящерицы и тень в Лесу Павших Гигантов дают дроп только хосту; редкие рассинхронизированные и
+  раздвоенные мобы; отдых не возвращает разрушаемое; стены, взорванные мобами, не переносятся.
+- Friendly fire allows lock-on; no notice for the guest when the mode changes; the death camera far from the partner.
+  «Огонь по своим» даёт наводиться; гостю нет уведомления о смене режима; камера после смерти вдали от напарника.
+
 ## 0.1.3 — 2026-09-12
 
 **Added / Добавлено**

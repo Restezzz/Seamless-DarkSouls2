@@ -1,4 +1,4 @@
-DS2 Seamless Co-op 0.1.1 - for the player who JOINS a friend
+DS2 Seamless Co-op 0.2.0 - for the player who JOINS a friend
 =============================================================
 (Русский текст - ниже)
 
@@ -23,12 +23,15 @@ EVERY TIME
 IF SOMETHING IS WRONG
   - The game says it is offline: the key file or server_ip does not match the
     host, or the host's server is not running.
+  - Thrown out a minute or two after joining, or never summoned: F1 -> Lobby ->
+    "Check the connection" (while in the lobby) -> "Copy the report", send it
+    to the host. A VPN or proxy in TUN mode is the usual suspect.
   - A crash or a bug: send the host ds2_seamless_coop.log and any
     ds2_seamless_crash_*.dmp from the game folder.
   - To remove the mod, delete dinput8.dll from the game folder.
 
 =============================================================
-DS2 Seamless Co-op 0.1.1 - для того, кто ПОДКЛЮЧАЕТСЯ к другу
+DS2 Seamless Co-op 0.2.0 - для того, кто ПОДКЛЮЧАЕТСЯ к другу
 =============================================================
 
 УСТАНОВКА (один раз)
@@ -52,6 +55,9 @@ DS2 Seamless Co-op 0.1.1 - для того, кто ПОДКЛЮЧАЕТСЯ к �
 ЕСЛИ ЧТО-ТО НЕ ТАК
   - Игра пишет «не в сети»: ключ или server_ip не совпадают с хостом, или у
     хоста не запущен сервер.
+  - Выкидывает через минуту-две после входа или не призывает: F1 -> Лобби ->
+    «Проверить связь» (находясь в лобби) -> «Скопировать отчёт», пришли его
+    хосту. Обычный подозреваемый - VPN или прокси в режиме TUN.
   - Вылет или ошибка: пришли хосту ds2_seamless_coop.log и файлы
     ds2_seamless_crash_*.dmp из папки игры.
   - Удалить мод - удалить dinput8.dll из папки игры.
