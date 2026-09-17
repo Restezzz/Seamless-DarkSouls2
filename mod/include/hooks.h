@@ -94,6 +94,8 @@ ULONGLONG GetLastSignCreateTime();   // GetTickCount64 of the last RequestCreate
 // been followed by 25 s without any message from the server: the game's line to
 // the server has stalled and no summon can work. Called from the game thread.
 void ServerWatchTick();
+ULONGLONG GetLastServerMessageTime();   // GetTickCount64 of the last message from the server, 0 if none
+bool      IsServerLineStalled();        // the warning above is standing
 
 // Aim the next sign this player creates at a given spot instead of the other
 // player's feet -- once. Used after a death, to be summoned back beside a
@@ -141,6 +143,11 @@ namespace WinsockHooks {
     // Server redirect configuration
     void SetServerRedirect(const std::string& ip, uint16_t port);
     bool IsRedirectActive();
+
+    // The address the game's own DNS gave for the login server, before the
+    // redirect ("" until the game has connected). 198.18.x.x there means a TUN
+    // proxy with fake-IP DNS (net_check.cpp).
+    std::string GetLastLoginTarget();
 }
 
 // ============================================================================

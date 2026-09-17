@@ -25,6 +25,7 @@
 #include "../../include/mod.h"
 #include "../../include/session.h"
 #include "../../include/network.h"
+#include "../../include/net_check.h"
 #include "../../include/hooks.h"
 #include "../../include/sync.h"
 #include "../../include/utils.h"
@@ -51,13 +52,20 @@ namespace {
 
 // ---- addresses to share ------------------------------------------------------
 
+// As Unicode: the connection report is Russian, and CF_TEXT would hand the
+// messenger it is pasted into question marks.
 void CopyToClipboard(const std::string& text) {
-    if (!OpenClipboard(nullptr)) return;
+    const int Wide = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, nullptr, 0);
+    if (Wide <= 0 || !OpenClipboard(nullptr)) return;
     EmptyClipboard();
-    if (HGLOBAL Mem = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1)) {
-        memcpy(GlobalLock(Mem), text.c_str(), text.size() + 1);
-        GlobalUnlock(Mem);
-        SetClipboardData(CF_TEXT, Mem);
+    if (HGLOBAL Mem = GlobalAlloc(GMEM_MOVEABLE, static_cast<size_t>(Wide) * sizeof(wchar_t))) {
+        if (auto* Dst = static_cast<wchar_t*>(GlobalLock(Mem))) {
+            MultiByteToWideChar(CP_UTF8, 0, text.c_str(), -1, Dst, Wide);
+            GlobalUnlock(Mem);
+            if (!SetClipboardData(CF_UNICODETEXT, Mem)) GlobalFree(Mem);
+        } else {
+            GlobalFree(Mem);
+        }
     }
     CloseClipboard();
 }
@@ -293,6 +301,8 @@ void Overlay::RenderMenu() {
 
         if (m_tab == 1) {
             RenderSettingsPage();
+        } else if (m_page == Page::NetCheck) {
+            RenderNetCheckPage();
         } else if (SessionManager::GetInstance().IsActive()) {
             RenderSessionPage();
         } else if (m_page == Page::Host) {
@@ -363,6 +373,9 @@ void Overlay::RenderHomePage() {
         m_page = Page::Join;
         m_inputPassword[0] = '\0';
         m_focusField = true;
+    }
+    if (Kit::Button(Tr("Check the connection", "Проверка связи"), Kit::ButtonKind::Ghost, 0.0f)) {
+        m_page = Page::NetCheck;
     }
 }
 
@@ -555,6 +568,9 @@ void Overlay::RenderSessionPage() {
         }
     }
 
+    if (Kit::Button(Tr("Check the connection", "Проверить связь"), Kit::ButtonKind::Secondary)) {
+        m_page = Page::NetCheck;
+    }
     if (Kit::Button(Tr("Give me soapstones", "Выдать мелки"), Kit::ButtonKind::Secondary)) {
         if (DS2Coop::Sync::PlayerSync::GetInstance().GrantSoapstones()) {
             ShowNotification(Tr("Soapstones added to your inventory.", "Мелки добавлены в инвентарь."), 4.0f, NotifyKind::Success);
@@ -572,6 +588,75 @@ void Overlay::RenderSessionPage() {
         m_visible = false;
         m_page = Page::Home;
         ShowNotification(Tr("You left the lobby.", "Вы покинули лобби."), 4.0f, NotifyKind::Info);
+    }
+}
+
+// ============================================================================
+// Connection check (net_check.cpp)
+// ============================================================================
+void Overlay::RenderNetCheckPage() {
+    using DS2Coop::Network::CheckLevel;
+    const float S = Kit::Scale();
+    if (BackLink()) { m_page = Page::Home; return; }
+    PageTitle(Tr("Connection check", "Проверка связи"));
+
+    const DS2Coop::Network::NetCheckView View = DS2Coop::Network::GetNetCheckView();
+    if (!View.running && !View.done) {
+        Kit::Paragraph(Tr("Looks at the route to the server, VPNs and proxies, DNS and the server's ports. In a lobby it also "
+                          "sends packets of every size between you and the partner, both ways. The partner needs this version of the mod.",
+                          "Проверяет маршрут к серверу, VPN и прокси, DNS и порты сервера. В лобби ещё гоняет пакеты всех "
+                          "размеров между вами и напарником в обе стороны — у напарника должна быть эта же версия мода."),
+                       Kit::Col::TextMuted);
+    }
+
+    const char* Label = View.running ? Tr("Checking\xE2\x80\xA6", "Проверяю\xE2\x80\xA6")
+                      : View.done    ? Tr("Check again", "Проверить ещё раз")
+                                     : Tr("Start the check", "Проверить");
+    if (Kit::Button(Label, Kit::ButtonKind::Primary, -1.0f, !View.running)) DS2Coop::Network::StartNetCheck();
+
+    ImDrawList* L = ImGui::GetWindowDrawList();
+    if (View.running) {
+        const ImVec2 P = ImGui::GetCursorScreenPos();
+        const float W = ImGui::GetContentRegionAvail().x, H = 6.0f * S;
+        ImGui::Dummy(ImVec2(W, H));
+        L->AddRectFilled(P, ImVec2(P.x + W, P.y + H), A(Kit::Col::Surface2), H * 0.5f);
+        L->AddRectFilled(P, ImVec2(P.x + W * std::clamp(View.progress, 0.02f, 1.0f), P.y + H), A(Kit::Col::Ember), H * 0.5f);
+    }
+
+    const float Indent = 18.0f * S;
+    for (const DS2Coop::Network::CheckLine& Line : View.lines) {
+        const ImU32 Color = Line.level == CheckLevel::Ok   ? Kit::Col::Green
+                          : Line.level == CheckLevel::Warn ? Kit::Col::Amber
+                          : Line.level == CheckLevel::Fail ? Kit::Col::Red
+                                                           : Kit::Col::Gold;
+        const ImVec2 P = ImGui::GetCursorScreenPos();
+        Kit::StatusDot(L, ImVec2(P.x + 5.0f * S, P.y + Kit::FontStrong()->FontSize * 0.5f + 1.0f * S), Color, false);
+        ImGui::Indent(Indent);
+        ImGui::PushFont(Kit::FontStrong());
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(Line.title.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopFont();
+        if (!Line.detail.empty()) {
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 7.0f * S);
+            ImGui::PushFont(Kit::FontSmall());
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(Kit::Col::TextMuted));
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(Line.detail.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::PopStyleColor();
+            ImGui::PopFont();
+        }
+        ImGui::Unindent(Indent);
+    }
+
+    if (View.done) {
+        ImGui::Dummy(ImVec2(0.0f, 2.0f * S));
+        if (Kit::Button(Tr("Copy the report", "Скопировать отчёт"), Kit::ButtonKind::Secondary)) {
+            CopyToClipboard(View.report);
+            ShowNotification(Tr("Report copied: paste it to the host.", "Отчёт скопирован: отправь его хосту."),
+                             3.0f, NotifyKind::Success);
+        }
     }
 }
 

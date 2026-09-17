@@ -21,6 +21,8 @@
 #include "../../include/utils.h"
 #include "../../include/session.h"
 #include "../../include/network.h"
+#include "../../include/net_check.h"
+#include "../../include/ui_settings.h"
 #include "../../include/sync.h"
 #include "../../include/hooks.h"
 #include "../../include/mod.h"
@@ -63,6 +65,40 @@ uint8_t GetChosenDamageMode() { return s_damageMode; }
 
 namespace DS2Coop::Hooks::ProtobufHooks {
 void SetSeamlessActive(bool) {}
+}
+
+// The connection check as it read on 17.09, made up only in the names.
+namespace DS2Coop::Network {
+void StartNetCheck() {}
+NetCheckView GetNetCheckView() {
+    using DS2Coop::UI::Tr;
+    NetCheckView V;
+    V.done = true;
+    V.progress = 1.0f;
+    V.lines = {
+        { CheckLevel::Warn, Tr("VPN or proxy adapters are up", "Работают VPN или прокси-адаптеры"),
+          Tr("happ-tun (Wintun Userspace Tunnel). A VPN or a proxy in TUN mode can carry Radmin's own traffic and lose large packets.",
+             "happ-tun (Wintun Userspace Tunnel). VPN или прокси в режиме TUN может пропускать через себя сам туннель Radmin и терять крупные пакеты.") },
+        { CheckLevel::Ok, Tr("Route to the server 26.12.34.56", "Маршрут к серверу 26.12.34.56"), Tr("through Radmin VPN (MTU 1500).", "через Radmin VPN (MTU 1500).") },
+        { CheckLevel::Warn, Tr("Internet traffic", "Интернет-трафик"),
+          Tr("goes through happ-tun. Radmin VPN's own tunnel may go through it too: put RvControlSvc.exe and DarkSoulsII.exe into its exceptions (direct).",
+             "идёт через happ-tun. Сам туннель Radmin VPN тоже может идти через него: добавь RvControlSvc.exe и DarkSoulsII.exe в исключения (напрямую, direct).") },
+        { CheckLevel::Ok, "DNS", Tr("ordinary answers.", "обычные ответы.") },
+        { CheckLevel::Ok, Tr("Server ports", "Порты сервера"), Tr("login 50031: 2 ms, auth 50000: 1 ms.", "вход 50031: 2 мс, авторизация 50000: 1 мс.") },
+        { CheckLevel::Ok, Tr("Game server", "Игровой сервер"), Tr("last message 4 s ago.", "последнее сообщение 4 с назад.") },
+        { CheckLevel::Fail, Tr("Packets from me to Lucatiel", "Пакеты от меня к Lucatiel"),
+          Tr("64: 8/8 \xC2\xB7 512: 8/8 \xC2\xB7 1024: 8/8 \xC2\xB7 1200: 8/8 \xC2\xB7 1300: 8/8 \xC2\xB7 1400: 8/8 \xC2\xB7 1472: 8/8 \xC2\xB7 2000: 0/8 \xC2\xB7 4000: 0/8 \xC2\xB7 8000: 0/8. Nothing over 1472 bytes gets through.",
+             "64: 8/8 \xC2\xB7 512: 8/8 \xC2\xB7 1024: 8/8 \xC2\xB7 1200: 8/8 \xC2\xB7 1300: 8/8 \xC2\xB7 1400: 8/8 \xC2\xB7 1472: 8/8 \xC2\xB7 2000: 0/8 \xC2\xB7 4000: 0/8 \xC2\xB7 8000: 0/8. Больше 1472 байт не проходит ничего.") },
+        { CheckLevel::Ok, Tr("Packets from Lucatiel to me", "Пакеты от Lucatiel ко мне"),
+          "64: 8/8 \xC2\xB7 512: 8/8 \xC2\xB7 1024: 8/8 \xC2\xB7 1200: 8/8 \xC2\xB7 1300: 8/8 \xC2\xB7 1400: 8/8 \xC2\xB7 1472: 8/8 \xC2\xB7 2000: 8/8 \xC2\xB7 4000: 8/8 \xC2\xB7 8000: 8/8" },
+        { CheckLevel::Info, Tr("Delay", "Задержка"), Tr("about 38 ms there and back.", "около 38 мс туда и обратно.") },
+        { CheckLevel::Fail, Tr("Verdict", "Вывод"),
+          Tr("datagrams over 1472 bytes do not get through between you. The game server's large packets die the same way, and after a few failed retries it drops the player. The usual cause is a VPN or proxy in TUN mode on the path (happ-tun): put Radmin VPN (RvControlSvc.exe) and DarkSoulsII.exe into its exceptions on both computers, or turn it off while playing.",
+             "пакеты больше 1472 байт между вами не проходят. Крупные пакеты игрового сервера гибнут так же, и после нескольких неудачных повторов сервер отключает игрока. Обычная причина — VPN или прокси в режиме TUN на пути (happ-tun): добавь Radmin VPN (RvControlSvc.exe) и DarkSoulsII.exe в его исключения на обоих компьютерах или выключай его на время игры.") },
+    };
+    V.report = "report";
+    return V;
+}
 }
 
 namespace DS2Coop::UI {

@@ -61,6 +61,7 @@ static std::string g_localSteamId;
 static constexpr ULONGLONG kServerSilentMs = 25000;
 static std::atomic<ULONGLONG> g_replyAwaitedSince{ 0 };   // the first request since the server last spoke
 static std::atomic<bool>      g_serverSilentWarned{ false };
+static std::atomic<ULONGLONG> g_lastServerMessageAt{ 0 };
 
 static void NoteRequestAwaitingReply() {
     ULONGLONG Expected = 0;
@@ -68,6 +69,7 @@ static void NoteRequestAwaitingReply() {
 }
 
 static void NoteServerMessage() {
+    g_lastServerMessageAt.store(GetTickCount64());
     const ULONGLONG Since = g_replyAwaitedSince.exchange(0);
     if (!g_serverSilentWarned.exchange(false)) return;
     LOG_INFO("[NET] the server answers again, %llu s after the unanswered request",
@@ -78,6 +80,9 @@ static void NoteServerMessage() {
 }
 
 namespace DS2Coop::Hooks {
+ULONGLONG GetLastServerMessageTime() { return g_lastServerMessageAt.load(); }
+bool      IsServerLineStalled() { return g_serverSilentWarned.load(); }
+
 void ServerWatchTick() {
     const ULONGLONG Since = g_replyAwaitedSince.load();
     if (!Since || g_serverSilentWarned.load()) return;

@@ -63,6 +63,7 @@ private:
     void RenderHostPage();
     void RenderJoinPage();
     void RenderSessionPage();
+    void RenderNetCheckPage();
     void RenderSettingsPage();
     void RenderFooter();
     void RenderNotifications();
@@ -73,7 +74,7 @@ private:
     bool m_visible = false;
     bool m_initialized = false;
 
-    enum class Page { Home, Host, Join };
+    enum class Page { Home, Host, Join, NetCheck };
     Page  m_page = Page::Home;
     int   m_tab = 0;              // 0 lobby, 1 settings
     float m_menuAnim = 0.0f;      // 0 closed .. 1 open

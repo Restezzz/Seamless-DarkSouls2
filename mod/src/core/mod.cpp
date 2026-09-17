@@ -12,6 +12,7 @@
 #include "../../include/hooks.h"
 #include "../../include/session.h"
 #include "../../include/network.h"
+#include "../../include/net_check.h"
 #include "../../include/sync.h"
 #include "../../include/ui.h"
 #include "../../include/utils.h"
@@ -210,6 +211,10 @@ bool SeamlessCoopMod::Initialize() {
             auto& sessionMgr = Session::SessionManager::GetInstance();
             sessionMgr.Update(deltaTime);
 
+            // A running connection check, lobby or not: it has to notice a lobby
+            // that closed under it (net_check.cpp).
+            Network::NetCheckTick();
+
             // ~20Hz update rate
             Sleep(50);
         }
@@ -254,6 +259,8 @@ void SeamlessCoopMod::Shutdown() {
         CloseHandle(m_updateThread);
         m_updateThread = nullptr;
     }
+    // And a connection check's own thread, before Winsock goes away under it.
+    Network::ShutdownNetCheck();
 
     // Disable seamless before unhooking
     Hooks::ProtobufHooks::SetSeamlessActive(false);

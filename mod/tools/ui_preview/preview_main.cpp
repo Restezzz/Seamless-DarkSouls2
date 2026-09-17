@@ -227,6 +227,11 @@ int main(int argc, char** argv) {
     PreviewSetSession(3);
     Shoot("lobby_guest", 20);
 
+    // The connection check with its results, as a guest.
+    O.m_page = Overlay::Page::NetCheck;
+    Shoot("netcheck", 20);
+    O.m_page = Overlay::Page::Home;
+
     // Menu closed: the hint in the corner and a few notifications.
     PreviewSetSession(0);
     O.SetVisible(false);

@@ -21,6 +21,7 @@
 #include "../../include/addresses.h"
 #include "../../include/utils.h"
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -37,6 +38,8 @@ static bool g_gameOnline = false;
 static bool g_redirectActive = false;
 static std::string g_redirectIP = "127.0.0.1";
 static uint16_t g_redirectPort = 50031;
+static std::mutex g_loginTargetMutex;
+static std::string g_lastLoginTarget;
 
 // ============================================================================
 // Hooked Winsock connect() — redirects FromSoft server to custom server
@@ -50,6 +53,10 @@ static int WSAAPI ConnectHook(SOCKET s, const sockaddr* name, int namelen) {
         inet_ntop(AF_INET, &addr->sin_addr, ipStr, sizeof(ipStr));
 
         LOG_INFO("[NET] Game connecting to %s:%u", ipStr, port);
+        if (port == DS2_LOGIN_PORT) {
+            std::lock_guard<std::mutex> lock(g_loginTargetMutex);
+            g_lastLoginTarget = ipStr;
+        }
 
         // Redirect all game server connections (login=50031, auth=50000, game=50010+)
         if (g_redirectActive && (port == DS2_LOGIN_PORT || port == 50000 ||
@@ -87,6 +94,11 @@ void WinsockHooks::SetServerRedirect(const std::string& ip, uint16_t port) {
 
 bool WinsockHooks::IsRedirectActive() {
     return g_redirectActive;
+}
+
+std::string WinsockHooks::GetLastLoginTarget() {
+    std::lock_guard<std::mutex> lock(g_loginTargetMutex);
+    return g_lastLoginTarget;
 }
 
 bool WinsockHooks::InstallHooks() {

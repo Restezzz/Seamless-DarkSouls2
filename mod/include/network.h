@@ -79,6 +79,10 @@ enum class PacketType : uint8_t {
     // The sign map the mod knows is a guest's home map while it is in the host's
     // world, so travelling in a session needs this (travel_sync.cpp).
     PlayerMap = 0x3E,
+    // The connection check from the menu (net_check.cpp): datagrams of a given
+    // size one way, small answers the other, to find the sizes the path between
+    // the two players loses. 17.09 nothing over 1472 bytes reached a friend.
+    NetProbe = 0x3F,
 
     // Custom data
     ChatMessage = 0x40,
@@ -199,7 +203,26 @@ struct PlayerMapPacket {
     PacketHeader header;
     int32_t      rawMap;       // 0x0A1F0000 = map 10310000
 };
+
+// header.size is the whole datagram, padding included: a probe of 4000 bytes is
+// this struct and 3955 bytes after it.
+struct NetProbePacket {
+    PacketHeader header;
+    uint8_t      kind;         // NetProbeKind
+    uint8_t      reserved[3];
+    uint32_t     run;          // the check this belongs to
+    uint32_t     round;        // which pass over the sizes
+    uint32_t     bytes;        // the datagram size the probe is about
+    uint64_t     sentAt;       // the asker's clock (ms), sent back as it came
+};
 #pragma pack(pop)
+
+enum class NetProbeKind : uint8_t {
+    Out  = 0,   // a probe of `bytes` bytes: answer with a small Ack
+    Ack  = 1,   // "your probe of `bytes` bytes arrived"
+    Ask  = 2,   // a small request: send me a datagram of `bytes` bytes
+    Back = 3,   // the answer to Ask, `bytes` bytes long
+};
 
 // Peer information
 struct PeerInfo {

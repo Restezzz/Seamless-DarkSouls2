@@ -3,6 +3,7 @@
 // Routes packets to the appropriate subsystem (session, sync, etc.)
 
 #include "../../include/network.h"
+#include "../../include/net_check.h"
 #include "../../include/hooks.h"
 #include "../../include/session.h"
 #include "../../include/sync.h"
@@ -87,6 +88,10 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
             if (packet->size >= sizeof(PlayerMapPacket)) {
                 DS2Coop::Sync::NotePartnerRawMap(reinterpret_cast<const PlayerMapPacket*>(packet)->rawMap);
             }
+            break;
+
+        case PacketType::NetProbe:
+            NetCheckOnProbe(packet, sender);   // checks the size itself
             break;
 
         case PacketType::DamageMode:

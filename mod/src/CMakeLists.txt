@@ -6,6 +6,7 @@ add_library(ds2_seamless_coop SHARED
     hooks/game_state_hooks.cpp
     network/peer_manager.cpp
     network/packet_handler.cpp
+    network/net_check.cpp
     session/session_manager.cpp
     sync/progress_sync.cpp
     sync/player_sync.cpp
@@ -48,6 +49,7 @@ target_link_libraries(ds2_seamless_coop PRIVATE
     minhook
     imgui
     ws2_32
+    iphlpapi
     d3d11
     dxgi
 )
