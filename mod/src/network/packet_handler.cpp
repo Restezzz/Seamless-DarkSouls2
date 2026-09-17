@@ -94,6 +94,15 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
             NetCheckOnProbe(packet, sender);   // checks the size itself
             break;
 
+        case PacketType::NpcGift:
+            if (packet->size >= sizeof(NpcGiftPacket)) {
+                const auto* Gift = reinterpret_cast<const NpcGiftPacket*>(packet);
+                // The count comes off the wire: never past the array it describes.
+                const uint32_t Count = Gift->count <= 16 ? Gift->count : 16;
+                DS2Coop::Sync::NotePartnerNpcGift(Gift->items, Count, sender.playerName);
+            }
+            break;
+
         case PacketType::DamageMode:
             if (packet->size >= sizeof(DamageModePacket)) {
                 const auto* Mode = reinterpret_cast<const DamageModePacket*>(packet);

@@ -60,6 +60,8 @@ bool GetLocalPlayerPosition(float& x, float& y, float& z, float& r) { x = y = z 
 static uint8_t s_damageMode = 1;   // friendly fire, so the preview shows a choice other than the default
 void    SetDamageMode(uint8_t mode) { s_damageMode = mode; }
 uint8_t GetDamageMode() { return s_damageMode; }
+int  GetEstusFlaskState() { return 0; }
+void RequestEstusGrant() {}
 uint8_t GetChosenDamageMode() { return s_damageMode; }
 }
 

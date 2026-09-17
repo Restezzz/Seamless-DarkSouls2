@@ -18,6 +18,20 @@
 // For a guest in a lobby both get "no", which is exactly the state that worked in
 // log (4). Each has its own switch in the ini.
 //
+// The map a guest walked or travelled to on its own (17.09, point 1: NPCs usable
+// only while the host is in the same area). A map's event scripts -- the NPCs' talk
+// among them -- run only through exe+0x453280 -> exe+0x1959C0(event area), and that
+// first asks exe+0x195CD0: in a session, in a world entered by a multiplayer warp,
+// "does the join's map (exe+0x2C6DE0 -> [joinCtrl+0x19C]) equal this area's map
+// ([area+0x18])?" The game writes +0x19C only on a guest's own map (exe+0x2C18CC)
+// and at the arrival (exe+0x2C2BB2), never on a travel, so every task of a map the
+// guest reached by itself stayed frozen: no "Talk" (the prompt is script command
+// 0x1FD68) and no NPC whose generator waits for its task (exe+0x451A50). In the log,
+// the first talk prompt of a guest alone in Majula came 15 s after the mod's enemy
+// sync pinned +0x19C to that map. So for a guest in the host's world the answer is
+// "yes" for the map it stands in; +0x19C itself is left alone, because incoming
+// packets are routed by it. Same switch as the talk scripts.
+//
 // Characters before the snapshot. A guest's arrival loads the host's map in join
 // state 3 and gets the host's world -- event flags, the enemies' dead-state store
 // -- in state 4 (exe+0x2C2FA0). The area's generators are made when the area loads
@@ -58,6 +72,7 @@ constexpr uint32_t  kMpPlayersWarp  = 0x513440;   // (session) -> bool
 constexpr uint32_t  kEsdMpReturn    = 0x45DD67;   // ESD function 0x1FE2A
 constexpr uint32_t  kNpcKindReturn  = 0x356398;   // NPC factory, kind 8/11 vs 7/10
 constexpr uint32_t  kGenAreaCreate  = 0x41A5F0;   // (generator manager, area index)
+constexpr uint32_t  kAreaEventsRun  = 0x195CD0;   // (event area) -> AL: this area's event tasks run here
 constexpr uint32_t  kNetRoot        = 0x1616CF8;
 constexpr uint32_t  kJoinCtrlVtable = 0x10D7BD8;
 constexpr ULONGLONG kDeferMaxMs     = 20000;
@@ -67,6 +82,7 @@ using GenCreateFn = void(__fastcall*)(void*, int32_t);
 
 PredFn      g_mpPlayersWarp = nullptr;
 GenCreateFn g_genCreate     = nullptr;
+PredFn      g_areaEventsRun = nullptr;
 
 std::atomic<bool>      g_talkScripts{ true };      // ini guest_npc_talk_scripts
 std::atomic<bool>      g_npcLocal{ true };         // ini guest_npc_local
@@ -76,6 +92,8 @@ std::atomic<uint32_t>  g_kindAnswers{ 0 };
 std::atomic<uintptr_t> g_deferCtrl{ 0 };
 std::atomic<ULONGLONG> g_deferSince{ 0 };
 std::atomic<uint32_t>  g_deferredCalls{ 0 };
+std::atomic<int32_t>   g_eventsFreedMap{ 0 };     // the last map whose events were let run here (log once)
+std::atomic<uint32_t>  g_eventsFreedCalls{ 0 };
 
 uintptr_t ExeBase() {
     static const uintptr_t Base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
@@ -108,6 +126,46 @@ int JoinState(uintptr_t* CtrlOut) {
 bool GuestInALobby() {
     auto& Lobby = Session::SessionManager::GetInstance();
     return Lobby.IsActive() && !Lobby.IsHost();
+}
+
+bool ReadI32(uintptr_t Addr, int32_t* Out) {
+    __try {
+        *Out = *reinterpret_cast<const int32_t*>(Addr);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// The map this player stands in, the game's own value ([[[netRoot+0x20]+0x5B8]+0xC]).
+bool ReadLocalMap(int32_t* Out) {
+    uintptr_t Root = 0, List = 0, Local = 0;
+    return ReadPtr(ExeBase() + kNetRoot, &Root) && ReadPtr(Root + 0x20, &List) && ReadPtr(List + 0x5B8, &Local) &&
+           ReadI32(Local + 0xC, Out) && *Out != 0;
+}
+
+uint32_t MapNumber(int32_t Raw) {
+    const uint32_t R = static_cast<uint32_t>(Raw);
+    return ((R >> 24) & 0xFF) * 1000000u + ((R >> 16) & 0xFF) * 10000u + ((R >> 8) & 0xFF) * 100u + (R & 0xFF);
+}
+
+uint64_t __fastcall AreaEventsRunDetour(void* Area) {
+    const uint64_t Stock = g_areaEventsRun(Area);
+    if ((Stock & 0xFF) || !Area || !g_talkScripts.load(std::memory_order_relaxed) || !GuestInALobby()) return Stock;
+    uintptr_t Ctrl = 0;
+    if (JoinState(&Ctrl) != 7) return Stock;
+    int32_t AreaMap = 0, MyMap = 0;
+    if (!ReadI32(reinterpret_cast<uintptr_t>(Area) + 0x18, &AreaMap) || !ReadLocalMap(&MyMap) || AreaMap != MyMap) {
+        return Stock;
+    }
+    g_eventsFreedCalls.fetch_add(1, std::memory_order_relaxed);
+    if (g_eventsFreedMap.exchange(AreaMap) != AreaMap) {
+        int32_t Pinned = 0;
+        ReadI32(Ctrl + 0x19C, &Pinned);
+        LOG_INFO("[NPC] the events of map %u, where I stand, were held back because the join names map %u -- "
+                 "run here (NPC talk and NPCs that wait for their event)", MapNumber(AreaMap), MapNumber(Pinned));
+    }
+    return Stock | 1;
 }
 
 uint64_t __fastcall MpPlayersWarpDetour(void* Session) {
@@ -177,6 +235,8 @@ bool InstallGuestWorld(bool TalkScripts, bool NpcLocal, bool WaitSnapshot) {
                reinterpret_cast<void**>(&g_mpPlayersWarp), "the multiplayer-world predicate");
         HookAt(kGenAreaCreate, reinterpret_cast<void*>(&GenAreaCreateDetour),
                reinterpret_cast<void**>(&g_genCreate), "area generator creation");
+        HookAt(kAreaEventsRun, reinterpret_cast<void*>(&AreaEventsRunDetour),
+               reinterpret_cast<void**>(&g_areaEventsRun), "the event-area gate");
     }
     LOG_INFO("[WORLD] a guest's world: NPC scripts %s, NPCs %s, characters %s",
              TalkScripts ? "as the owner's (talk)" : "the game's way",

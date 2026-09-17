@@ -124,6 +124,20 @@ uintptr_t GetPartnerCharacter(uint64_t maxAgeMs);
 // without lock-on, or a real fight (pvp_modes.cpp, docs §3.25). The host picks
 // the mode; every machine then gives the guest the same team, so each side's
 // damage filter agrees with the other's.
+bool InstallPvpModes();    // the status flag getter behind "no lock-on in friendly fire"
+
+// NPC progress for both players (npc_progress.cpp): a guest's talk progress is kept
+// in the host's world, and what an NPC's talk gives goes to the partner as well if
+// the partner has none of it (ini npc_progress).
+bool InstallNpcProgress(bool enabled);
+void NotePartnerNpcGift(const void* items, uint32_t count, const std::string& from);   // network thread
+void NpcProgressGameTick();   // game thread
+
+// The Estus Flask from the menu for a player who has none (estus_grant.cpp).
+bool InstallEstusGrant();
+int  GetEstusFlaskState();   // -1 unknown (loading, not hooked), 0 no flask, 1 has one
+void RequestEstusGrant();    // any thread; given on the game thread if still missing
+void EstusGameTick();        // game thread
 void PvpModesGameTick();   // game thread
 enum : uint8_t { kDamageNone = 0, kDamageFriendlyFire = 1, kDamagePvp = 2 };
 void    SetDamageMode(uint8_t mode);      // the host's choice (ini damage_mode, the menu)
@@ -180,6 +194,17 @@ bool InstallTravelSync(bool enabled);
 void NoteLocalTravel(int32_t rawMap);      // a travel warp was just taken here
 void NotePartnerRawMap(int32_t rawMap);    // network thread: the map the partner stands in
 void TravelResyncTick();                   // game thread
+// Game thread: zeroes every entry of the network enemy table that does not point at
+// a generator record the game has loaded right now for the table's map, so the reset
+// that follows writes through none of them. Returns how many, or -1 if unreadable.
+int ForgetStaleEnemyEntries(uintptr_t enemyManager);
+// Both players stand in the same map, by the game's own map value on each side (the
+// partner's from its PlayerMap packets, if one came in the last few seconds).
+bool PlayersShareMap();
+// Probe: both characters' bonfire-travel pose numbers for a while after either
+// player travels (travel_sync.cpp). Game thread.
+void WatchPoses();
+void PoseProbeTick();
 void CancelDeathRejoin();             // leaving on purpose: no automatic return
 // Put a sign down again for the host to summon, without the once-per-handshake
 // limit of the automatic join (player_sync.cpp).

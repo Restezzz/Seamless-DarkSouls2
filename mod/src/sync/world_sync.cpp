@@ -21,6 +21,15 @@
 // the enemy generator manager's own update (exe+0x417810, main loop): nothing is
 // iterating the generator lists at that point, and the update only runs while a
 // world is loaded, so a reset that arrives during a loading screen simply waits.
+//
+// One reset per rest, not two (17.09, point 11). When both players rest within
+// seconds of each other, every machine used to reset twice: its own rest, then the
+// replay of the partner's. A second reset lands while the first one's enemies are
+// still being put in; the respawn (exe+0x40E3E0 -> exe+0x40F9C0) forgets every
+// record's character but destroys only those of generators in states 4-6, so a
+// character caught half-way stays where it stood while a fresh copy appears at its
+// starting spot -- the doubled enemies of the report. So a reset closer than
+// kResetDedupMs to the previous one on this machine is skipped, in either order.
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -50,6 +59,7 @@ namespace {
 
 constexpr uint32_t kRestResetRva = 0x17FD70;   // world reset on rest
 constexpr uint32_t kGenUpdateRva = 0x417810;   // EnemyGeneratorManager update
+constexpr ULONGLONG kResetDedupMs = 10000;     // a reset this soon after the last one here adds nothing
 
 // The reset takes no arguments; the detour forwards the four argument registers
 // untouched anyway, in case the caller left something the game relies on.
@@ -63,6 +73,14 @@ std::atomic<bool> g_installed{ false };
 std::atomic<bool> g_enabled{ true };
 std::atomic<bool> g_pending{ false };
 std::atomic<bool> g_broken{ false };   // a replay threw once: stop replaying this run
+std::atomic<ULONGLONG> g_lastResetAt{ 0 };   // the last reset that ran here, own rest or replay
+std::atomic<bool>      g_lastWasReplay{ false };
+
+// How long ago the world was last reset here, or ~0 if never.
+ULONGLONG SinceLastReset() {
+    const ULONGLONG At = g_lastResetAt.load();
+    return At ? GetTickCount64() - At : ~0ull;
+}
 std::mutex        g_fromMutex;
 std::string       g_pendingFrom;
 
@@ -111,7 +129,16 @@ void BroadcastReset() {
 }
 
 void __fastcall RestResetDetour(void* A, void* B, void* C, void* D) {
+    // Just reset for the partner's rest in this same world: that reset was this one.
+    const ULONGLONG Since = SinceLastReset();
+    if (g_enabled.load() && HavePartner() && InSharedWorld() && g_lastWasReplay.load() && Since < kResetDedupMs) {
+        LOG_INFO("[WORLD] rested here %llu ms after the partner's rest reset this world -- not reset a second time, "
+                 "and nobody is told", static_cast<unsigned long long>(Since));
+        return;
+    }
     g_restReset(A, B, C, D);
+    g_lastResetAt.store(GetTickCount64());
+    g_lastWasReplay.store(false);
     ForgetGuestDropRolls();   // respawned enemies can drop again
     if (!g_enabled.load() || !HavePartner()) return;
     if (!InSharedWorld()) {
@@ -145,6 +172,8 @@ void __fastcall GenUpdateDetour(void* Manager, float* Dt) {
     GuestDropsTick();
     SummonAcceptGameTick();
     PvpModesGameTick();
+    EstusGameTick();
+    NpcProgressGameTick();
     ChrDeathTick();
     if (g_pending.exchange(false) && g_enabled.load() && !g_broken.load()) {
         std::string From;
@@ -152,10 +181,17 @@ void __fastcall GenUpdateDetour(void* Manager, float* Dt) {
             std::lock_guard<std::mutex> Lock(g_fromMutex);
             From = g_pendingFrom;
         }
+        const ULONGLONG Since = SinceLastReset();
         if (!InSharedWorld()) {
             LOG_INFO("[WORLD] %s rested, but I am not in their world right now -- nothing here to reset",
                      From.c_str());
+        } else if (Since < kResetDedupMs) {
+            LOG_INFO("[WORLD] %s rested %llu ms after the world was last reset here -- already fresh, not reset "
+                     "a second time", From.c_str(), static_cast<unsigned long long>(Since));
         } else if (ReplayResetSafely()) {
+            g_lastResetAt.store(GetTickCount64());
+            g_lastWasReplay.store(true);
+            ForgetGuestDropRolls();
             LOG_INFO("[WORLD] %s rested -- the world was reset here too", From.c_str());
             UI::Overlay::GetInstance().ShowNotification(
                 UI::Format(UI::Tr("%s rested at a bonfire \xE2\x80\x94 enemies are back",

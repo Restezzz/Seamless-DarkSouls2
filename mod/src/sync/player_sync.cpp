@@ -3278,6 +3278,9 @@ bool PlayerSync::Initialize() {
     DS2Coop::Sync::SetBossSyncEnabled(SeamlessCoopMod::GetInstance().GetConfig().boss_sync);
     // Damage between the players, as this player last chose it as a host
     // (pvp_modes.cpp). A guest plays by whatever its host sends.
+    DS2Coop::Sync::InstallPvpModes();
+    DS2Coop::Sync::InstallEstusGrant();
+    DS2Coop::Sync::InstallNpcProgress(SeamlessCoopMod::GetInstance().GetConfig().npc_progress);
     DS2Coop::Sync::SetDamageMode(SeamlessCoopMod::GetInstance().GetDamageModeSetting());
     // A guest's world: NPC talk, NPCs run here, characters after the host's world
     // has arrived (guest_world.cpp); travelling in a session (travel_sync.cpp);

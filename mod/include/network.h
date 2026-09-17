@@ -83,6 +83,9 @@ enum class PacketType : uint8_t {
     // size one way, small answers the other, to find the sizes the path between
     // the two players loses. 17.09 nothing over 1472 bytes reached a friend.
     NetProbe = 0x3F,
+    // What an NPC's talk gave this player (npc_progress.cpp): the partner's game adds
+    // each item it has none of, so a key or the Estus Flask reaches both players.
+    NpcGift = 0x42,
 
     // Custom data
     ChatMessage = 0x40,
@@ -202,6 +205,22 @@ struct DamageModePacket {
 struct PlayerMapPacket {
     PacketHeader header;
     int32_t      rawMap;       // 0x0A1F0000 = map 10310000
+};
+
+// One item as the game's ItemGive takes it (16 bytes).
+struct NpcGiftItem {
+    int32_t      kind;
+    int32_t      id;
+    float        durability;
+    int16_t      count;
+    uint8_t      upgrade;
+    uint8_t      infusion;
+};
+
+struct NpcGiftPacket {
+    PacketHeader header;
+    uint32_t     count;        // how many items are filled
+    NpcGiftItem  items[16];
 };
 
 // header.size is the whole datagram, padding included: a probe of 4000 bytes is

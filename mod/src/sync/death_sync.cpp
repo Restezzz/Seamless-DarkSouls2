@@ -88,6 +88,7 @@ constexpr uint32_t kPhantomParam   = 0x16F540;    // (phantom type) -> that type
 constexpr uint32_t kAcceptEvent    = 0x2BD0D0;    // NetSummonAcceptMultiplayCtrl slot E0 (ctrl, reason): a host event for one guest
 constexpr uint32_t kBossPhaseTwo   = 0x1810E0;    // (boss manager): script command 0x2046A, "the boss is dead" -> phase 2
 constexpr uint32_t kBossAbort      = 0x180EC0;    // (boss manager): script command 0x2046C, the fight called off (phase 1 only)
+constexpr uint32_t kBonfireView    = 0x17E890;    // (bonfire list): picks the set the list reads, empties the session set
 
 constexpr int kAcceptBossKilled = 1;              // accept controller reason: a boss died in the host's world
 constexpr int kBranchDutyDone   = 1;              // phantom branch reason: the boss is dead, duty fulfilled
@@ -111,6 +112,10 @@ constexpr int       kJoinInWorld        = 7;      // join controller state: in t
 constexpr ULONGLONG kRejoinSettleMs     = 3000;   // home and alive this long before joining again
 constexpr ULONGLONG kPartnerSettleMs    = 4000;   // the partner up this long, so its position is the new one
 constexpr ULONGLONG kRejoinGiveUpMs     = 3 * 60 * 1000;
+constexpr ULONGLONG kJoinFlightMs       = 45000;   // a sign put down for the way back gets this long to become a join
+constexpr ULONGLONG kJoinStuckMs        = 120000;  // a join under way this long without arriving is given up
+constexpr int       kJoinTriesMax       = 3;
+constexpr float     kCameraFollowMaxM   = 30.0f;   // farther than this the death camera stays with the body
 constexpr ULONGLONG kHoldGiveUpMs       = 15 * 60 * 1000;
 constexpr ULONGLONG kPartnerBossFreshMs = 12000;  // a BossState from the host counts this long
 constexpr ULONGLONG kBossResendMs       = 4000;   // the host repeats a running fight this often
@@ -152,6 +157,8 @@ std::atomic<bool>      g_hostTravelPending{ false }; // the host travelled by bo
 std::atomic<int32_t>   g_hostTravelMap{ 0 };
 std::atomic<int32_t>   g_hostTravelBonfire{ 0 };
 std::atomic<bool>      g_cancelRejoin{ false };    // the player left on purpose
+std::atomic<bool>      g_flightOpen{ false };      // a sign for the way back is out (JoinFlight below)
+std::atomic<bool>      g_hostTravelledInFlight{ false };
 std::atomic<int32_t>   g_partnerBossActive{ 0 };   // the host's boss fight, as it reported it
 std::atomic<int32_t>   g_partnerBossPhase{ 0 };
 std::atomic<ULONGLONG> g_partnerBossAt{ 0 };
@@ -394,6 +401,23 @@ struct Rejoin {
 };
 Rejoin g_rejoin{};
 
+// The way back after a death, from the sign on (17.09, point 10). The rejoin used to
+// end the moment its sign went down: at 12:08:44 the guest's sign was out, the host
+// summoned at 12:08:45 and travelled at 12:08:47 -- its warp ends every join still on
+// the way (the accept controller gets reason 4) -- the sign was removed at 12:08:51,
+// and nothing tried again. So the flight lasts until the guest is in the host's world
+// (join state 7); a join that appears and vanishes, a host travel in between, or no
+// join at all within kJoinFlightMs sends the guest back to waiting -- for the host to
+// arrive wherever it went, when it travelled -- up to kJoinTriesMax signs.
+struct JoinFlight {
+    bool      Active;
+    ULONGLONG Since;
+    int       Try;
+    bool      SawJoin;
+    Spot      HostFrom;
+};
+JoinFlight g_flight{};
+
 int32_t   g_lastHp = kNoHp;
 int32_t   g_lastBossActive = -100, g_lastBossPhase = -100;
 ULONGLONG g_bossSentAt = 0;
@@ -603,6 +627,10 @@ void CorrectArrival(const int32_t* Request, int32_t RawMap) {
 // guest's departure would. The detach loop skips null entries and zeroes each
 // entry it visits, so the departure that follows writes nothing; the table is
 // filled again, for the new map, when the guest joins there.
+//
+// A table that is armed but not attached yet is reset as well: the game's tick
+// (exe+0x5170E0) would attach it on the next frame, to the map this warp is about
+// to free. Entries that already point at nothing loaded are zeroed first.
 void ResetEnemySyncForHostWarp() {
     auto& Lobby = Session::SessionManager::GetInstance();
     if (!Lobby.IsActive()) return;   // host or guest: a client's table points into the old map just the same
@@ -615,10 +643,16 @@ void ResetEnemySyncForHostWarp() {
             return;
         }
         int32_t State = 0;
-        if (!ReadI32(Mgr + 8, &State) || State == 0) return;
+        if (!ReadI32(Mgr + 8, &State)) return;
+        const uint8_t Armed = *reinterpret_cast<const uint8_t*>(Mgr + 0x74);
+        if (State == 0 && !Armed) return;
+        // The zeroing only ever makes the reset write less; the reset runs whatever it
+        // found, because the table must not stay attached to the map this warp frees.
+        const int Stale = State != 0 ? ForgetStaleEnemyEntries(Mgr) : 0;
         reinterpret_cast<NetEnemyResetFn>(ExeBase() + kNetEnemyReset)(reinterpret_cast<void*>(Mgr));
-        LOG_INFO("[DEATH] travelling in a co-op session: emptied the enemy sync table (state %d) "
-                 "while this map is still loaded", State);
+        LOG_INFO("[DEATH] travelling in a co-op session: emptied the enemy sync table (state %d, armed %d, "
+                 "%d entries into freed memory%s) while this map is still loaded", State, static_cast<int>(Armed),
+                 Stale, Stale < 0 ? ", unreadable" : "");
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         LOG_WARNING("[DEATH] emptying the enemy sync table before the warp threw -- left alone");
     }
@@ -1070,6 +1104,25 @@ void TickCameraHold(int32_t Hp) {
     if (Partner) PointCameraAt(Partner, "still down", false);
 }
 
+// Whether the death camera may go to the partner (17.09, points 5 and 15). The
+// world around a player is loaded from that player's own position (exe+0x3BE060
+// asks [GMImp+0xD0] for it, never the camera), and the death camera (mode 6,
+// FallDead, exe+0x4A1E90) moves its eye only for half a second, 10% a frame, in X and
+// Z, stopped by collision. A partner far away got a camera stuck part of the way,
+// over ground that was never loaded. So the camera moves only to a partner in the
+// same map and within kCameraFollowMaxM.
+bool PartnerCloseEnoughToWatch(float* Distance) {
+    *Distance = -1.0f;
+    if (!PlayersShareMap()) return false;
+    Spot Partner{};
+    if (!ReadPartnerSpot(&Partner)) return false;
+    float X = 0, Y = 0, Z = 0, Rot = 0;
+    if (!GetLocalPlayerPosition(X, Y, Z, Rot)) return false;
+    const float Dx = Partner.X - X, Dy = Partner.Y - Y, Dz = Partner.Z - Z;
+    *Distance = std::sqrt(Dx * Dx + Dy * Dy + Dz * Dz);
+    return *Distance <= kCameraFollowMaxM;
+}
+
 // --- tick parts ----------------------------------------------------------------
 void TickLife(int32_t Hp) {
     if (Hp == kNoHp) return;   // loading: keep the last value
@@ -1088,7 +1141,15 @@ void TickLife(int32_t Hp) {
     if (g_enabled.load() && Session::SessionManager::GetInstance().IsActive()) {
         if (Died) {
             const uintptr_t Partner = GetPartnerCharacter(5000);
-            if (Partner) {
+            float Distance = -1.0f;
+            if (Partner && !PartnerCloseEnoughToWatch(&Distance)) {
+                if (Distance < 0.0f) {
+                    LOG_INFO("[CAM] the camera stays with me: the partner is in another map or its position is not known");
+                } else {
+                    LOG_INFO("[CAM] the camera stays with me: the partner is %.0f m away -- the world is loaded around "
+                             "me, not around it", Distance);
+                }
+            } else if (Partner) {
                 g_cameraMoved = PointCameraAt(Partner, "this player is down", true);
             } else {
                 LOG_INFO("[CAM] nobody to follow: the partner's character has not been seen in the last 5 s");
@@ -1472,14 +1533,16 @@ int CollectOwnBonfires(Network::BonfireEntry* Out, uint32_t Max) {
 // bonfire outright is what the menu cannot argue with. Only the lit bit is set,
 // never the kindle level above it.
 int WriteSessionBonfires(const uint16_t* Ids, const uint8_t* Flags, uint32_t Count,
-                         bool Share, int* Unlocked) {
+                         bool Share, int* Unlocked, uintptr_t List = 0) {
     __try {
-        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
-        if (!Gm) return -1;
-        const uintptr_t Events = *reinterpret_cast<const uintptr_t*>(Gm + 0x70);
-        if (!Events) return -1;
-        const uintptr_t List = *reinterpret_cast<const uintptr_t*>(Events + 0x58);
-        if (!List) return -1;
+        if (!List) {
+            const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+            if (!Gm) return -1;
+            const uintptr_t Events = *reinterpret_cast<const uintptr_t*>(Gm + 0x70);
+            if (!Events) return -1;
+            List = *reinterpret_cast<const uintptr_t*>(Events + 0x58);
+            if (!List) return -1;
+        }
         const uint32_t Records = *reinterpret_cast<const uint32_t*>(List + kTravelCount);
         const uintptr_t Array = *reinterpret_cast<const uintptr_t*>(List + kTravelArray);
         if (!Array || Records > 4096) return -1;
@@ -1527,7 +1590,8 @@ void SendOwnBonfires() {
 }
 
 // No lock is held while the game's memory is written: the copy is taken first.
-void ApplyPartnerBonfires() {
+// List 0: the travel list the game manager holds now.
+void ApplyPartnerBonfires(uintptr_t List = 0, bool AtLoad = false) {
     uint16_t Ids[kMaxBonfires] = {};
     uint8_t  Flags[kMaxBonfires] = {};
     uint32_t Count = 0;
@@ -1542,7 +1606,12 @@ void ApplyPartnerBonfires() {
     if (!Count) return;
     const bool Share = IsProgressSharingOn();
     int Unlocked = 0;
-    const int Written = WriteSessionBonfires(Ids, Flags, Count, Share, &Unlocked);
+    const int Written = WriteSessionBonfires(Ids, Flags, Count, Share, &Unlocked, List);
+    if (AtLoad) {
+        LOG_INFO("[BONFIRE] a load emptied the session set -- the host's %u bonfires written back at once "
+                 "(%d record(s) changed), before this map's bonfires are built", Count, Written);
+        return;
+    }
     static int s_lastWritten = -2;
     if (Written != s_lastWritten) {
         s_lastWritten = Written;
@@ -1557,6 +1626,31 @@ void ApplyPartnerBonfires() {
         LOG_INFO("[BONFIRE] %d of the other player's bonfires lit in my own set as well -- progress sharing is on",
                  Unlocked);
     }
+}
+
+// A load empties the session set here (exe+0x17E890, from the event manager's
+// set-up at exe+0x44F316) and the map's bonfire objects read it once, when they are
+// built: exe+0x1CB310 registers "kindle" for a bonfire exe+0x17E6F0 calls unlit. The
+// tick's refill came after that (17.09 11:32:16): the bonfire the guest stood at
+// offered only "kindle", and kindling failed at its own lit check, which by then
+// read the refilled byte -- no kindling, no resting. So a guest's view of the host's
+// set is written back the moment the game empties it.
+using BonfireViewFn = void(__fastcall*)(void* list);
+BonfireViewFn g_bonfireViewOriginal = nullptr;
+
+int ReadViewSafe(void* List) {
+    __try {
+        return *reinterpret_cast<const int32_t*>(reinterpret_cast<uintptr_t>(List) + kTravelView);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
+    }
+}
+
+void __fastcall BonfireViewDetour(void* List) {
+    g_bonfireViewOriginal(List);
+    auto& Lobby = Session::SessionManager::GetInstance();
+    if (!List || !Lobby.IsActive() || Lobby.IsHost() || ReadViewSafe(List) != 1) return;
+    ApplyPartnerBonfires(reinterpret_cast<uintptr_t>(List), true);
 }
 
 // The host sends its set; a guest writes the one it was sent, again and again,
@@ -1703,6 +1797,74 @@ void TickRejoin(int Join, int32_t Hp) {
     LOG_INFO("[DEATH] home and alive -- joining the partner again");
     Toast("Back to your partner's world...", "Возвращаюсь в мир напарника…", UI::NotifyKind::Player);
     RequestRejoinSignPlacement();
+    const int Try = g_flight.Try + 1;
+    g_flight = JoinFlight{ true, Now, Try, false, Spot{} };
+    g_hostTravelledInFlight.store(false);
+    g_flightOpen.store(true);
+}
+
+void EndFlight() {
+    g_flight = JoinFlight{};
+    g_flightOpen.store(false);
+    g_hostTravelledInFlight.store(false);
+}
+
+void TickJoinFlight(int Join) {
+    if (!g_flight.Active) return;
+    if (g_cancelRejoin.load() || !Session::SessionManager::GetInstance().IsActive()) {
+        EndFlight();
+        return;
+    }
+    if (Join == kJoinInWorld) {
+        if (g_flight.Try > 1) LOG_INFO("[DEATH] back in the host's world on sign %d", g_flight.Try);
+        EndFlight();
+        return;
+    }
+    if (!PartnerConnected()) {
+        LOG_INFO("[DEATH] the partner is gone -- the way back is not followed any more");
+        EndFlight();
+        return;
+    }
+    if (Join >= 0) g_flight.SawJoin = true;
+    const ULONGLONG Now = GetTickCount64();
+    // A join that started and neither arrived nor ended: nothing more to do by itself
+    // (code review 17.09 -- Lost and Late alone left the flight open for good).
+    if (g_flight.SawJoin && Join >= 0 && Now - g_flight.Since > kJoinStuckMs) {
+        LOG_WARNING("[DEATH] the way back has been under way for %llu s without arriving (join state %d, sign %d) -- "
+                    "not waiting for it any more", static_cast<unsigned long long>((Now - g_flight.Since) / 1000),
+                    Join, g_flight.Try);
+        Toast("Could not get back to your partner \xE2\x80\x94 join again from the menu.",
+              "Не получилось вернуться к напарнику \xE2\x80\x94 зайди снова через меню.", UI::NotifyKind::Warning);
+        EndFlight();
+        return;
+    }
+    const bool HostMoved = g_hostTravelledInFlight.exchange(false);
+    if (HostMoved && !g_flight.HostFrom.Valid) {
+        Spot From{};
+        if (ReadPartnerSpot(&From)) g_flight.HostFrom = From;
+    }
+    const bool Lost = g_flight.SawJoin && Join < 0;
+    const bool Late = !g_flight.SawJoin && Now - g_flight.Since > kJoinFlightMs;
+    if (!Lost && !Late) return;
+
+    const JoinFlight Was = g_flight;
+    g_flight.Active = false;
+    g_flightOpen.store(false);
+    const char* Why = Lost ? (Was.HostFrom.Valid ? "the host travelled while it was on the way" : "the join did not go through")
+                           : "no summon came";
+    if (Was.Try >= kJoinTriesMax) {
+        LOG_WARNING("[DEATH] the way back into the host's world failed (%s, sign %d) -- not trying again by myself",
+                    Why, Was.Try);
+        Toast("Could not get back to your partner \xE2\x80\x94 join again from the menu.",
+              "Не получилось вернуться к напарнику \xE2\x80\x94 зайди снова через меню.", UI::NotifyKind::Warning);
+        EndFlight();
+        return;
+    }
+    ArmRejoin(false, false);
+    g_rejoin.WaitHostArrival = Was.HostFrom.Valid;
+    g_rejoin.From = Was.HostFrom;
+    LOG_INFO("[DEATH] the way back did not complete (%s, sign %d) -- trying again%s", Why, Was.Try,
+             Was.HostFrom.Valid ? " once the host has arrived where it went" : "");
 }
 
 } // namespace
@@ -1722,6 +1884,8 @@ bool InstallDeathSync(bool Enabled) {
         HookAt(kBattleStart, reinterpret_cast<void*>(&BattleStartDetour), &g_battleStartOriginal, "boss battle start");
         HookAt(kAcceptEvent, reinterpret_cast<void*>(&AcceptEventDetour), &g_acceptEventOriginal, "guest accept controller event");
         HookAt(kBossPhaseTwo, reinterpret_cast<void*>(&BossPhaseTwoDetour), &g_phaseTwoOriginal, "boss phase 2");
+        HookAt(kBonfireView, reinterpret_cast<void*>(&BonfireViewDetour),
+               reinterpret_cast<void**>(&g_bonfireViewOriginal), "bonfire list view");
     }
     LOG_INFO("[DEATH] death handling %s", Enabled ? "ON: back in the partner's world after a death, boss fights wait for both"
                                                   : "off (death_respawn=false): the game's own way, probes only");
@@ -1745,7 +1909,9 @@ void DeathSyncGameTick() {
     TickHold(Join, Hp);
     TickHostTravel(Join);
     TickRejoin(Join, Hp);
+    TickJoinFlight(Join);
     TravelResyncTick();
+    PoseProbeTick();
 }
 
 void NotePartnerLife(bool Alive) {
@@ -1757,6 +1923,8 @@ void NoteHostTravelled(int32_t RawMap, int32_t Bonfire) {
     g_hostTravelMap.store(RawMap);
     g_hostTravelBonfire.store(Bonfire);
     g_hostTravelPending.store(true);
+    if (g_flightOpen.load()) g_hostTravelledInFlight.store(true);
+    WatchPoses();
     LOG_INFO("[DEATH] the host says it travelled to bonfire %d (map %u)", Bonfire, RawMapToArea(RawMap));
 }
 

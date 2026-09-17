@@ -377,6 +377,15 @@ void Overlay::RenderHomePage() {
     if (Kit::Button(Tr("Check the connection", "Проверка связи"), Kit::ButtonKind::Ghost, 0.0f)) {
         m_page = Page::NetCheck;
     }
+    RenderEstusButton();
+}
+
+// Shown only while the game says this character has no Estus Flask (estus_grant.cpp).
+void Overlay::RenderEstusButton() {
+    if (DS2Coop::Sync::GetEstusFlaskState() != 0) return;
+    if (Kit::Button(Tr("Get the Estus Flask", "Получить флягу с эстусом"), Kit::ButtonKind::Secondary)) {
+        DS2Coop::Sync::RequestEstusGrant();
+    }
 }
 
 void Overlay::RenderHostPage() {
@@ -571,6 +580,7 @@ void Overlay::RenderSessionPage() {
     if (Kit::Button(Tr("Check the connection", "Проверить связь"), Kit::ButtonKind::Secondary)) {
         m_page = Page::NetCheck;
     }
+    RenderEstusButton();
     if (Kit::Button(Tr("Give me soapstones", "Выдать мелки"), Kit::ButtonKind::Secondary)) {
         if (DS2Coop::Sync::PlayerSync::GetInstance().GrantSoapstones()) {
             ShowNotification(Tr("Soapstones added to your inventory.", "Мелки добавлены в инвентарь."), 4.0f, NotifyKind::Success);

@@ -99,6 +99,10 @@ struct ModConfig {
     // Script and menu gates that keep a host with a guest from doing things alone
     // players can: joining a covenant, summoning from Majula (docs §3.39).
     bool mp_gates = true;
+    // NPCs for both players (docs §3.44): a guest's talk progress in the host's world
+    // is kept instead of being dropped by the game, and an item an NPC's talk gives
+    // reaches the partner too if the partner has none of it. On by default.
+    bool npc_progress = true;
     // Damage between the players when this player hosts: "off" (none), "ff"
     // (friendly fire, no lock-on on each other) or "pvp" (the guest counts as an
     // evil spirit: it can be locked on and hit, the enemies leave it alone).

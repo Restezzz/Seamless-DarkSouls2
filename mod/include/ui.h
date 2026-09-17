@@ -64,6 +64,7 @@ private:
     void RenderJoinPage();
     void RenderSessionPage();
     void RenderNetCheckPage();
+    void RenderEstusButton();
     void RenderSettingsPage();
     void RenderFooter();
     void RenderNotifications();
