@@ -42,6 +42,19 @@
 // coordinates. So while both players' own map values differ, those packets are
 // dropped.
 //
+// 3b. A table still attached while the players stand in different maps is let go
+// (0.2.2 point 3: after the host went to Majula the guest's enemies stood still and
+// took no hits). A client's attach (exe+0x517880) hands every enemy to the network:
+// the authority bit (record +0x42 bit 0) cleared, the character's manipulator
+// switched to network control (vt[0x38](0)). Only a claim, a handover or the host's
+// detach give it back -- the client reset exe+0x517A80 only empties the entries. With
+// the host's character gone nobody sends those enemies' state and nothing takes them
+// over (exe+0x518230 needs two players in the session), so they froze. The reset
+// exe+0x517080 runs the host's detach exe+0x517E70 for state 1, which sets the
+// authority bit back and calls vt[0x38](1) for every entry, so state 1 is written
+// first on either side; the table ends at state 0, unarmed, and step 5 arms it again
+// once both share a map. Ini enemy_detach_when_apart.
+//
 // Steps 3 to 5 wait while a warp is under way and for kSettleMs after every load.
 // On 17.09 step 5 ran in the very second of the host's travel, while the fade still
 // showed the old map: the game's tick (exe+0x5170E0 -> exe+0x517BF0) attached the
@@ -99,6 +112,7 @@ constexpr ULONGLONG kRetryMs          = 10000;
 constexpr ULONGLONG kMapSendMs        = 2000;
 constexpr ULONGLONG kPartnerMapFresh  = 8000;
 constexpr ULONGLONG kTravelNoteMs     = 120000;   // an arrival this soon after my travel is logged as its end
+constexpr ULONGLONG kApartMs          = 5000;     // in different maps this long before the table is let go
 constexpr uint32_t  kEventPackets     = 0x18A500;   // listener (self, type 'E'-'G', data, size)
 constexpr uint32_t  kGenPackets       = 0x1F6FD0;   // listener (self, type 'N'-'R', data, size)
 
@@ -115,6 +129,7 @@ MapPacketFn g_eventPacketsOriginal = nullptr;
 MapPacketFn g_genPacketsOriginal   = nullptr;
 std::atomic<uint32_t> g_mapPacketsDropped{ 0 };
 std::atomic<bool> g_enabled{ true };
+std::atomic<bool> g_detachWhenApart{ true };
 
 // The partner's record, as the game last queued it.
 std::mutex g_recordMutex;
@@ -372,6 +387,17 @@ bool ResetTableSafe(uintptr_t Mgr) {
     }
 }
 
+// The host's detach for either side: see 3b above.
+bool DetachTableSafe(uintptr_t Mgr) {
+    __try {
+        *reinterpret_cast<int32_t*>(Mgr + 8) = 1;
+        reinterpret_cast<ObjFn>(ExeBase() + kEnemyReset)(reinterpret_cast<void*>(Mgr));
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 bool ArmTableSafe(uintptr_t Mgr, bool Client, uintptr_t JoinCtrl, int32_t Map) {
     __try {
         if (Client && JoinCtrl) {
@@ -433,6 +459,20 @@ bool ReadTableHeadSafe(uintptr_t Mgr, uintptr_t* Entries, int32_t* Map) {
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
+    }
+}
+
+// Records of [First, End) that say "killed since the last rest" (rec+0x76 & 3); -1 unreadable.
+int CountDeadRecordsSafe(uintptr_t First, uintptr_t End) {
+    if (!First || End <= First) return -1;
+    __try {
+        int Dead = 0;
+        for (uintptr_t Rec = First; Rec < End; Rec += kGenRecordSize) {
+            if (*reinterpret_cast<const uint8_t*>(Rec + 0x76) & 3) ++Dead;
+        }
+        return Dead;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return -1;
     }
 }
 
@@ -501,6 +541,30 @@ bool EmptyStaleTable(const EnemyTable& T, int32_t MyMap) {
     return true;
 }
 
+// 3b. An attached table while the partner has stood in another map for kApartMs.
+//     True when the table was let go.
+bool DetachTableWhenApart(const EnemyTable& T, int32_t MyMap, ULONGLONG Now) {
+    static ULONGLONG s_apartSince = 0;
+    const ULONGLONG TheirAt = g_partnerMapAt.load();
+    const int32_t Theirs = g_partnerMap.load();
+    const bool Attached = T.Ok && (T.State == 1 || T.State == 2);
+    const bool Apart = TheirAt && Now - TheirAt < kPartnerMapFresh && LooksLikeRawMap(Theirs) && Theirs != MyMap;
+    if (!g_detachWhenApart.load() || !Attached || !Apart) {
+        s_apartSince = 0;
+        return false;
+    }
+    if (!s_apartSince) s_apartSince = Now;
+    if (Now - s_apartSince < kApartMs) return false;
+    s_apartSince = 0;
+    const int Stale = ForgetStaleEnemyEntries(T.Mgr);
+    const bool Done = DetachTableSafe(T.Mgr);
+    LOG_INFO("[TRAVEL] the partner has stood in map %u for %llu s and I stand in %u -- the enemy sync table (state %d, "
+             "map %u, %d entries into freed memory zeroed) let go, every enemy back under this game's control: %s",
+             RawToArea(Theirs), kApartMs / 1000, RawToArea(MyMap), T.State, RawToArea(T.Area), Stale,
+             Done ? "done" : "threw");
+    return true;
+}
+
 // 4. The partner's character, when both share this map and it is missing here. True
 //    when there is nothing more to do this tick.
 bool RequeuePartnerIfMissing(uintptr_t List, int32_t MyMap, ULONGLONG Now) {
@@ -545,9 +609,10 @@ int ForgetStaleEnemyEntries(uintptr_t Mgr) {
     LiveRecordsSafe(Map, &First, &End);
     return ZeroEntriesOutsideSafe(Entries, First, End);
 }
-bool InstallTravelSync(bool Enabled) {
+bool InstallTravelSync(bool Enabled, bool DetachWhenApart) {
     static bool Installed = false;
     g_enabled.store(Enabled);
+    g_detachWhenApart.store(DetachWhenApart);
     if (!Installed) {
         Installed = true;
         HookAt(kQueuePlayer, reinterpret_cast<void*>(&QueuePlayerDetour), reinterpret_cast<void**>(&g_queueOriginal),
@@ -557,9 +622,10 @@ bool InstallTravelSync(bool Enabled) {
         HookAt(kGenPackets, reinterpret_cast<void*>(&GenPacketsDetour),
                reinterpret_cast<void**>(&g_genPacketsOriginal), "the enemy generator packets");
     }
-    LOG_INFO("[TRAVEL] travelling in a session: %s", Enabled
+    LOG_INFO("[TRAVEL] travelling in a session: %s%s", Enabled
         ? "players stay together -- characters and shared enemies are put back when both share a map"
-        : "off (travel_resync=false)");
+        : "off (travel_resync=false)",
+        Enabled && DetachWhenApart ? "; enemies shared only while both stand in one map" : "");
     return g_queueOriginal != nullptr;
 }
 
@@ -695,10 +761,23 @@ void TravelResyncTick() {
     if (Arrived) NoteArrivalAfterTravel(Now);
     LogDroppedMapPackets(Now, MyMap);
 
+    // Probe (0.2.2 point 11): what the host's own map holds as killed when a guest is
+    // all the way in, to compare with what the guest applies from the snapshot.
+    static bool s_guestWasIn = false;
+    if (GuestIn && !s_guestWasIn) {
+        uintptr_t First = 0, End = 0;
+        LiveRecordsSafe(MyMap, &First, &End);
+        LOG_INFO("[TRAVEL] a guest is all the way in: %d of %llu enemy records of my map %u killed since my last rest",
+                 CountDeadRecordsSafe(First, End), static_cast<unsigned long long>(First ? (End - First) / kGenRecordSize : 0),
+                 RawToArea(MyMap));
+    }
+    s_guestWasIn = GuestIn;
+
     if (!Guest && !Host) return;
 
     const EnemyTable T = ReadEnemyTable();
     if (EmptyStaleTable(T, MyMap)) return;
+    if (DetachTableWhenApart(T, MyMap, Now)) return;
 
     // A host puts nobody back while the guest is not fully in its world: the guest's
     // map packets say where it stands, and at home it may well stand in this map.
@@ -713,6 +792,7 @@ void TravelResyncTick() {
     // 5. Shared enemies again.
     if (T.Ok && T.State == 0 && !T.Armed && Now - s_armedAt >= kRetryMs) {
         s_armedAt = Now;
+        if (Guest) EnemyReconcileNow();   // what the host has killed goes first (enemy_reconcile.cpp)
         const bool Done = ArmTableSafe(T.Mgr, Guest, JoinCtrl, MyMap);
         LOG_INFO("[TRAVEL] we share map %u with the partner's character here -- enemy sync armed again as the %s: %s",
                  RawToArea(MyMap), Guest ? "guest" : "host", Done ? "done" : "threw");

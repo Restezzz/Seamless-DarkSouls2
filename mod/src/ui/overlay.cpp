@@ -199,8 +199,9 @@ void PageTitle(const char* text) {
     ImGui::PopFont();
 }
 
+// A real button, not a text link: on the lobby pages the link was easy to miss (17.09).
 bool BackLink() {
-    return Kit::Button(Tr("\xE2\x80\xB9  Back", "\xE2\x80\xB9  Назад"), Kit::ButtonKind::Ghost, 0.0f);
+    return Kit::Button(Tr("\xE2\x80\xB9  Back", "\xE2\x80\xB9  Назад"), Kit::ButtonKind::Secondary, 0.0f);
 }
 
 } // namespace

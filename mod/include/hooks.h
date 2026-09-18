@@ -109,6 +109,10 @@ bool IsMapOriginKnown(uint32_t area);
 void NoteRemoteMapOrigin(uint32_t area, float x, float y, float z);   // packet MapOriginInfo
 bool GetLocalMapOrigin(uint32_t* area, float* x, float* y, float* z);
 void ShareLocalMapOrigin();   // tell the other player about the map I am standing in
+// The sign about to be created only measures the map: it is not aimed at anyone and
+// the other player is not told (set around the call that creates it).
+void SetSignProbe(bool probe);
+bool IsGameOriginTrusted();   // the game's own map origins matched a known one
 
 namespace ProtobufHooks {
     bool InstallHooks();

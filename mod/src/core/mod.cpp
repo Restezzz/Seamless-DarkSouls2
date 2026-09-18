@@ -394,12 +394,42 @@ void SeamlessCoopMod::LoadConfig() {
                     m_config.guest_npc_local = (value == "true" || value == "1");
                 } else if (key == "guest_wait_for_snapshot") {
                     m_config.guest_wait_for_snapshot = (value == "true" || value == "1");
+                } else if (key == "enemy_states_at_join") {
+                    m_config.enemy_states_at_join = (value == "true" || value == "1");
+                } else if (key == "enemy_detach_when_apart") {
+                    m_config.enemy_detach_when_apart = (value == "true" || value == "1");
+                } else if (key == "guest_result_type_fix") {
+                    m_config.guest_result_type_fix = (value == "true" || value == "1");
+                } else if (key == "enemy_dead_reconcile") {
+                    m_config.enemy_dead_reconcile = (value == "true" || value == "1");
+                } else if (key == "kill_counts_reconcile") {
+                    m_config.kill_counts_reconcile = (value == "true" || value == "1");
+                } else if (key == "guest_kill_counts") {
+                    m_config.guest_kill_counts = (value == "true" || value == "1");
+                } else if (key == "boss_while_down") {
+                    m_config.boss_while_down = (value == "true" || value == "1");
+                } else if (key == "join_slot_confirm") {
+                    m_config.join_slot_confirm = (value == "true" || value == "1");
+                } else if (key == "guest_event_scripts_owner") {
+                    m_config.guest_event_scripts_owner = (value == "true" || value == "1");
+                } else if (key == "guest_npc_hits_ignored") {
+                    m_config.guest_npc_hits_ignored = (value == "true" || value == "1");
+                } else if (key == "chest_lids_reconcile") {
+                    m_config.chest_lids_reconcile = (value == "true" || value == "1");
+                } else if (key == "boss_guest_starts") {
+                    m_config.boss_guest_starts = (value == "true" || value == "1");
+                } else if (key == "far_death_camera") {
+                    m_config.far_death_camera = (value == "true" || value == "1");
                 } else if (key == "travel_resync") {
                     m_config.travel_resync = (value == "true" || value == "1");
                 } else if (key == "mp_gates") {
                     m_config.mp_gates = (value == "true" || value == "1");
                 } else if (key == "npc_progress") {
                     m_config.npc_progress = (value == "true" || value == "1");
+                } else if (key == "effigy_summon") {
+                    m_config.effigy_summon = (value == "true" || value == "1");
+                } else if (key == "transfer_events_solo") {
+                    m_config.transfer_events_solo = (value == "true" || value == "1");
                 } else if (key == "npc_solid") {
                     m_config.npc_solid = (value == "true" || value == "1");
                 } else if (key == "debug_hotkeys") {
@@ -469,9 +499,24 @@ void SeamlessCoopMod::SaveConfig() {
         configFile << "guest_npc_talk_scripts=" << (m_config.guest_npc_talk_scripts ? "true" : "false") << "\n";
         configFile << "guest_npc_local=" << (m_config.guest_npc_local ? "true" : "false") << "\n";
         configFile << "guest_wait_for_snapshot=" << (m_config.guest_wait_for_snapshot ? "true" : "false") << "\n";
+        configFile << "enemy_states_at_join=" << (m_config.enemy_states_at_join ? "true" : "false") << "\n";
+        configFile << "enemy_detach_when_apart=" << (m_config.enemy_detach_when_apart ? "true" : "false") << "\n";
+        configFile << "guest_result_type_fix=" << (m_config.guest_result_type_fix ? "true" : "false") << "\n";
+        configFile << "enemy_dead_reconcile=" << (m_config.enemy_dead_reconcile ? "true" : "false") << "\n";
+        configFile << "kill_counts_reconcile=" << (m_config.kill_counts_reconcile ? "true" : "false") << "\n";
+        configFile << "guest_kill_counts=" << (m_config.guest_kill_counts ? "true" : "false") << "\n";
+        configFile << "boss_while_down=" << (m_config.boss_while_down ? "true" : "false") << "\n";
+        configFile << "join_slot_confirm=" << (m_config.join_slot_confirm ? "true" : "false") << "\n";
+        configFile << "guest_event_scripts_owner=" << (m_config.guest_event_scripts_owner ? "true" : "false") << "\n";
+        configFile << "guest_npc_hits_ignored=" << (m_config.guest_npc_hits_ignored ? "true" : "false") << "\n";
+        configFile << "chest_lids_reconcile=" << (m_config.chest_lids_reconcile ? "true" : "false") << "\n";
+        configFile << "boss_guest_starts=" << (m_config.boss_guest_starts ? "true" : "false") << "\n";
+        configFile << "far_death_camera=" << (m_config.far_death_camera ? "true" : "false") << "\n";
         configFile << "travel_resync=" << (m_config.travel_resync ? "true" : "false") << "\n";
         configFile << "mp_gates=" << (m_config.mp_gates ? "true" : "false") << "\n";
         configFile << "npc_progress=" << (m_config.npc_progress ? "true" : "false") << "\n";
+        configFile << "effigy_summon=" << (m_config.effigy_summon ? "true" : "false") << "\n";
+        configFile << "transfer_events_solo=" << (m_config.transfer_events_solo ? "true" : "false") << "\n";
         configFile << "debug_hotkeys=" << (m_config.debug_hotkeys ? "true" : "false") << "\n";
         configFile << "sign_under_feet=" << (m_config.sign_under_feet ? "true" : "false") << "\n";
         configFile << "flag_sync=" << m_config.flag_sync << "\n";

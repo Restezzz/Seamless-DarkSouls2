@@ -574,12 +574,13 @@ void PeerManager::HandleHandshakePacket(const HandshakePacket* hs, const sockadd
         DS2Coop::Hooks::ProtobufHooks::SetSeamlessActive(true);
         LOG_INFO("[SEAMLESS] Handshake confirmed — seamless mode ON");
         // The host accepted us: start the automatic summon from our side.
-        DS2Coop::Sync::RequestAutoSignPlacement();
+        const bool SignQueued = DS2Coop::Sync::RequestAutoSignPlacement();
 
-        // Show connection notification
+        // Show connection notification -- the summon promise only with a sign on its way.
         DS2Coop::UI::Overlay::GetInstance().ShowNotification(
-            DS2Coop::UI::Tr("Connected. The host will summon you in a moment.",
-                            "Подключено. Хост сейчас вас призовёт."),
+            SignQueued ? DS2Coop::UI::Tr("Connected. The host will summon you in a moment.",
+                                         "Подключено. Хост сейчас вас призовёт.")
+                       : DS2Coop::UI::Tr("Connected.", "Подключено."),
             5.0f, DS2Coop::UI::NotifyKind::Success);
     }
 

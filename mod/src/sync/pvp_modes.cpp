@@ -105,6 +105,22 @@ constexpr int       kFlagNoLockOn   = 0x37;       // "cannot be locked on to"
 constexpr uint32_t  kLockFilterCall = 0x3829DF;   // return address in the lock-on filter exe+0x382630
 constexpr uint32_t  kLockPassCall   = 0x3895A6;   // return address in its second pass exe+0x3893B0
 constexpr ptrdiff_t kGeneratorInChr = 0x110;      // -1 for a player, a generator record otherwise
+// Friendly fire still let the players lock on to each other (17.09, checklist item 12), and the
+// status getter above logged not one answer for the partner. The lock-on list has one way in:
+// the PlayerCtrl update calls exe+0x382630 every frame, which walks the target manager and asks
+// each entry for its character through its vt[0x30] -- exe+0x41FE90 for a character's entry,
+// called at exe+0x38292F -- and skips an entry that answers null (TEST RAX,RAX / JZ at
+// exe+0x382938). Its second pass exe+0x3893B0 asks the same at exe+0x38953A and its cast handles
+// null. So in friendly fire those two callers get null for the session players' characters, on
+// both machines; damage and every other use of the getter are left alone. Can run on worker
+// threads: the detour reads atomics only.
+constexpr uint32_t  kTargetChrGet   = 0x41FE90;   // TargetCharacterCtrl vt[0x30]: (entry) -> its character
+constexpr uint32_t  kLockFilterRet  = 0x382932;   // the lock-on filter's call
+constexpr uint32_t  kLockPassRet    = 0x38953D;   // its second pass
+constexpr uint32_t  kPlayerSlots    = 0x1A8;      // [netRoot+0x20]: five slots of 0xD0 from here
+constexpr uint32_t  kSlotSize       = 0xD0;
+constexpr uint32_t  kSlotChr        = 0x40;       // the slot's character
+constexpr int       kNoLockMax      = 4;
 constexpr ULONGLONG kHostModeFreshMs = 10000;     // a guest trusts the host's last word this long
 constexpr ULONGLONG kModeResendMs    = 3000;      // the host repeats its choice this often
 constexpr ULONGLONG kPartnerFreshMs  = 500;       // a partner object seen drawn this recently
@@ -249,8 +265,7 @@ int ReadJoinState() {
 // local player and no generator record (docs §3.31). Checked before every write,
 // because the partner object is only known from the code that draws it and does
 // not survive a map load.
-bool IsOtherPlayer(uintptr_t Chr, uintptr_t Local) {
-    if (!Chr || !Local || Chr == Local) return false;
+bool PlayerShapedSafe(uintptr_t Chr, uintptr_t Local) {
     __try {
         const uintptr_t Mine = *reinterpret_cast<const uintptr_t*>(Local);
         const uintptr_t Its  = *reinterpret_cast<const uintptr_t*>(Chr);
@@ -259,6 +274,14 @@ bool IsOtherPlayer(uintptr_t Chr, uintptr_t Local) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+}
+
+// Player-shaped and held by a network player slot: red phantoms and other NPC phantoms
+// are player-shaped too, and one of them was taken for the partner (17.09: the
+// "cannot be locked on to" answer never fired once in friendly fire).
+bool IsOtherPlayer(uintptr_t Chr, uintptr_t Local) {
+    if (!Chr || !Local || Chr == Local) return false;
+    return PlayerShapedSafe(Chr, Local) && IsSessionPlayer(Chr);
 }
 
 bool WriteTeam(uintptr_t Chr, uint8_t Team, uint8_t* Was) {
@@ -294,6 +317,55 @@ void SendMode(uint8_t Mode) {
     Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
 }
 
+using TargetChrFn = uintptr_t(__fastcall*)(void*);
+TargetChrFn            g_targetChrOriginal = nullptr;
+std::atomic<uintptr_t> g_noLockChr[kNoLockMax] = {};
+std::atomic<uint32_t>  g_noLockNulls{ 0 };
+
+uintptr_t __fastcall TargetChrDetour(void* Entry) {
+    const uintptr_t Chr = g_targetChrOriginal(Entry);
+    if (!Chr) return Chr;
+    const uintptr_t Ret = reinterpret_cast<uintptr_t>(_ReturnAddress()) - ExeBase();
+    if (Ret != kLockFilterRet && Ret != kLockPassRet) return Chr;
+    for (const auto& Slot : g_noLockChr) {
+        if (Slot.load(std::memory_order_relaxed) == Chr) {
+            g_noLockNulls.fetch_add(1, std::memory_order_relaxed);
+            return 0;
+        }
+    }
+    return Chr;
+}
+
+// The session players' characters other than this player's, from the network player slots
+// ([[netRoot+0x20]+0x1A8+i*0xD0]+0x40): what friendly fire keeps out of the lock-on list.
+int SessionPlayerChrsSafe(uintptr_t Local, uintptr_t* Out, int Max) {
+    int N = 0;
+    __try {
+        const uintptr_t Root = *reinterpret_cast<const uintptr_t*>(ExeBase() + kNetRoot);
+        const uintptr_t List = Root ? *reinterpret_cast<const uintptr_t*>(Root + 0x20) : 0;
+        if (!List) return 0;
+        for (int I = 0; I < 5 && N < Max; ++I) {
+            const uintptr_t Chr = *reinterpret_cast<const uintptr_t*>(List + kPlayerSlots + I * kSlotSize + kSlotChr);
+            if (Chr && Chr != Local) Out[N++] = Chr;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return N;
+}
+
+// Game thread: the characters the lock-on filter is refused, or none.
+void SetNoLockCharacters(bool On, uintptr_t Local) {
+    uintptr_t Chrs[kNoLockMax] = {};
+    const int N = On ? SessionPlayerChrsSafe(Local, Chrs, kNoLockMax) : 0;
+    static int s_count = -1;
+    for (int I = 0; I < kNoLockMax; ++I) g_noLockChr[I].store(I < N ? Chrs[I] : 0, std::memory_order_relaxed);
+    if (N != s_count) {
+        LOG_INFO("[PVP] lock-on refused for %d session player character(s) here (target getter exe+0x%X%s)", N,
+                 kTargetChrGet, g_targetChrOriginal ? "" : " -- NOT hooked");
+        s_count = N;
+    }
+}
+
 // Game thread. Logs each change of the partner the getter says "no lock-on" for.
 void SetNoLockTarget(uintptr_t Status, const char* WhyOff) {
     const uintptr_t Was = g_noLockStatus.exchange(Status);
@@ -317,6 +389,8 @@ void NoLockProbeTick() {
     const ULONGLONG Now = GetTickCount64();
     if (Now - s_at < 10000) return;
     s_at = Now;
+    const uint32_t Nulls = g_noLockNulls.exchange(0);
+    if (Nulls) LOG_INFO("[PVP] friendly fire: the partner kept out of the lock-on list %u times in 10 s", Nulls);
     const uint32_t Answers = g_noLockAnswers.exchange(0);
     if (!g_noLockStatus.load() || !Answers) return;
     const uintptr_t Caller = g_noLockLastCaller.load() - ExeBase();
@@ -368,8 +442,10 @@ void ApplyModes() {
     uintptr_t Gm = 0, Local = 0;
     if (!ReadPtr(ExeBase() + kGameManagerImp, &Gm) || !ReadPtr(Gm + 0xD0, &Local)) {   // loading
         SetNoLockTarget(0, "loading");
+        SetNoLockCharacters(false, 0);
         return;
     }
+    SetNoLockCharacters(Mode == kDamageFriendlyFire, Local);
 
     const uintptr_t Partner = GetPartnerCharacter(kPartnerFreshMs);
     const bool PartnerOk = IsOtherPlayer(Partner, Local);
@@ -445,6 +521,12 @@ bool InstallPvpModes() {
         reinterpret_cast<void*>(ExeBase() + kStatusFlagGet), reinterpret_cast<void*>(&StatusFlagDetour),
         reinterpret_cast<void**>(&g_statusFlagOriginal));
     if (!Ok) g_statusFlagOriginal = nullptr;
+    const bool Target = Hooks::HookManager::GetInstance().InstallHook(
+        reinterpret_cast<void*>(ExeBase() + kTargetChrGet), reinterpret_cast<void*>(&TargetChrDetour),
+        reinterpret_cast<void**>(&g_targetChrOriginal));
+    if (!Target) g_targetChrOriginal = nullptr;
+    LOG_INFO("[PVP] lock-on target getter exe+0x%X %s", kTargetChrGet,
+             Target ? "hooked: friendly fire keeps the partner out of the lock-on list" : "NOT hooked");
     LOG_INFO("[PVP] status flag getter exe+0x%X %s", kStatusFlagGet,
              Ok ? "hooked: friendly fire keeps lock-on off the partner" : "NOT hooked: friendly fire allows lock-on");
     return Ok;

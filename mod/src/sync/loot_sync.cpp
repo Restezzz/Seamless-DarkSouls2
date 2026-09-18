@@ -195,6 +195,7 @@ struct Pending {
     uint32_t Packed = 0;
     bool     Chest = false;
     bool     Wall = false;     // an object broken there: State is the StateAct state to put on it
+    bool     Kill = false;     // a once-only enemy killed there: Area its raw map, Object its generator id
     uint32_t State = 0;
     uint32_t Cycle = 0;
 };
@@ -757,10 +758,15 @@ void SavePendingLocked() {
            "# A chest emptied there: owner\tarea\tobject\tlot\tstate\tC\tlid\tcycle -- kept until\n"
            "# the owner's own save says the chest is empty.\n"
            "# An object broken there (a wall): owner\tarea\tobject\t0\t0\tW\tstate\t0 -- kept until\n"
-           "# the owner's own world loads it broken.\n";
+           "# the owner's own world loads it broken.\n"
+           "# A once-only enemy killed there whose drop was taken: owner\tmap\tgenerator\t0\t0\tK\t0\tcycle\n"
+           "# -- counted as killed in the owner's own world the next time that map loads.\n";
     char Numbers[96];
     for (const Pending& E : g_pending) {
-        if (E.Wall) {
+        if (E.Kill) {
+            std::snprintf(Numbers, sizeof(Numbers), "\t%08X\t%08X\t00000000\t00000000\tK\t0\t%u\n",
+                          E.Area, E.Object, E.Cycle);
+        } else if (E.Wall) {
             std::snprintf(Numbers, sizeof(Numbers), "\t%08X\t%08X\t00000000\t00000000\tW\t%u\t0\n",
                           E.Area, E.Object, E.State);
         } else if (E.Chest) {
@@ -784,7 +790,8 @@ void LoadPending() {
         const std::vector<std::string> Parts = SplitTabs(Line);
         const bool ChestLine = Parts.size() == 8 && Parts[5] == "C";
         const bool WallLine = Parts.size() == 8 && Parts[5] == "W";
-        if ((Parts.size() != 5 && !ChestLine && !WallLine) || Parts[0].empty()) continue;
+        const bool KillLine = Parts.size() == 8 && Parts[5] == "K";
+        if ((Parts.size() != 5 && !ChestLine && !WallLine && !KillLine) || Parts[0].empty()) continue;
         try {
             Pending E;
             E.Owner = Parts[0];
@@ -799,6 +806,9 @@ void LoadPending() {
             } else if (WallLine) {
                 E.Wall = true;
                 E.State = static_cast<uint32_t>(std::stoul(Parts[6]));
+            } else if (KillLine) {
+                E.Kill = true;
+                E.Cycle = static_cast<uint32_t>(std::stoul(Parts[7]));
             }
             g_pending.push_back(E);
         } catch (...) {
@@ -812,7 +822,7 @@ std::vector<PendingPod> OwnerPods(const std::string& Owner, bool AllAreas, uint3
     if (Owner.empty()) return Pods;
     std::lock_guard<std::mutex> Lock(g_pendingMutex);
     for (const Pending& E : g_pending) {
-        if (E.Owner != Owner || (!AllAreas && E.Area != AreaId)) continue;
+        if (E.Kill || E.Owner != Owner || (!AllAreas && E.Area != AreaId)) continue;
         Pods.push_back(PendingPod{ E.Area, E.Object, E.Lot, E.Packed, 0, E.Chest ? 1u : 0u, E.State, E.Cycle,
                                    E.Wall ? 1u : 0u });
     }
@@ -827,8 +837,8 @@ uint32_t ForgetApplied(const std::string& Owner, const std::vector<PendingPod>& 
         if (!Pod.Applied) continue;
         for (size_t I = 0; I < g_pending.size(); ++I) {
             const Pending& E = g_pending[I];
-            if (E.Owner == Owner && E.Area == Pod.Area && E.Object == Pod.Object && E.Chest == (Pod.Chest != 0) &&
-                E.Wall == (Pod.Wall != 0)) {
+            if (!E.Kill && E.Owner == Owner && E.Area == Pod.Area && E.Object == Pod.Object &&
+                E.Chest == (Pod.Chest != 0) && E.Wall == (Pod.Wall != 0)) {
                 g_pending.erase(g_pending.begin() + static_cast<std::ptrdiff_t>(I));
                 ++Removed;
                 break;
@@ -922,7 +932,7 @@ void RememberPickup(const PickupProbe& P) {
         std::lock_guard<std::mutex> Lock(g_pendingMutex);
         bool Replaced = false;
         for (Pending& E : g_pending) {
-            if (E.Owner == Owner && E.Area == P.Area && E.Object == P.Id && !E.Chest && !E.Wall) {
+            if (E.Owner == Owner && E.Area == P.Area && E.Object == P.Id && !E.Chest && !E.Wall && !E.Kill) {
                 E.Lot = Lot;
                 E.Packed = Packed;
                 Replaced = true;
@@ -1020,6 +1030,7 @@ void __fastcall AreaRestoreDetour(uintptr_t StateMgr, uint64_t AreaArg) {
                  " (%u full + %u compact), %u remembered pickups, %u rebuilt; %u chests, %u empty for you",
                  AreaId, S.Items, S.FromFull + S.FromCompact, S.FromFull, S.FromCompact,
                  S.Remembered, S.WasLive, S.Chests, S.ChestsTaken);
+        ApplyHostChestLids(AreaId);   // chest_lids.cpp: the host's open chests, after this player's own records
         const ULONGLONG Now = GetTickCount64();
         if (S.Items && Now - g_lastAreaToast.load() > 120000) {
             g_lastAreaToast.store(Now);
@@ -1140,6 +1151,143 @@ void LogPickup(uint64_t Handle, const PickupProbe& P, bool HaveContents, const D
              Verdict, StillThere ? "still there" : "gone");
 }
 
+// --- a once-only enemy killed in the host's world (17.09, second report point 6) -------------
+// An enemy that is killed once and for all (a crystal lizard: its generator's limit is 1 and no
+// death flag) is kept dead by its kill counter alone. In the host's world a guest's kill is never
+// counted in its own save -- exe+0x40FDB0 skips the count in a world entered by a multiplayer warp,
+// and a count there would land in the session slot, thrown away on leaving -- so at home it spawned
+// again and dropped its item a second time ("the drop also fell in my world, from the same snake,
+// which should be dead"). When the guest takes such an enemy's drop, the kill is remembered; the
+// next time that map loads in the guest's own world it is counted there (exe+0x1F63E0), before the
+// map's generators are made. Only taking the drop counts: a drop left lying stays at home.
+constexpr uint32_t kGenOfHandle   = 0x17B7E0;   // (&[rec+0x10]) -> the record's generator
+constexpr uint32_t kKillCountGet  = 0x1F6760;   // (kill store, area slot, generator id) -> AL: times killed
+constexpr uint32_t kKillCountUp   = 0x1F63E0;   // (kill store, area slot, generator id): once more
+constexpr uint32_t kAreaBySlot    = 0x3BCE60;   // (mapMgr, area slot) -> area; its raw map at +8
+constexpr uintptr_t kKillSlotSize = 0xB10;
+using KillCountGetFn = uint64_t(__fastcall*)(uintptr_t, uint32_t, uint32_t);
+using KillCountUpFn  = void(__fastcall*)(uintptr_t, uint32_t, uint32_t);
+
+struct GeneratorDrop {
+    uintptr_t Rec;
+    int32_t   Map;
+    uint16_t  GenId;
+};
+
+struct KillFacts {
+    bool    Taken;
+    bool    Lying;
+    uint8_t Limit;
+    int32_t DeathFlag;
+    uint8_t RowBits;
+};
+
+// The generator record whose drop this handle is ([rec+0x88]), in any loaded block.
+bool FindGeneratorDropSafe(uint64_t Handle, GeneratorDrop* Out) {
+    __try {
+        const uintptr_t Gm = GameManager();
+        const uintptr_t GenMgr = Gm ? *reinterpret_cast<uintptr_t*>(Gm + 0x40) : 0;
+        if (!GenMgr) return false;
+        for (int32_t Slot = 0; Slot < 0x2A; ++Slot) {
+            const uintptr_t Block = *reinterpret_cast<uintptr_t*>(GenMgr + 0x20 + static_cast<uintptr_t>(Slot) * 8);
+            if (!Block) continue;
+            const uintptr_t First = *reinterpret_cast<uintptr_t*>(Block + 0x18);
+            uint32_t N = *reinterpret_cast<uint32_t*>(Block + 0x20);
+            if (!First) continue;
+            if (N > 4096) N = 4096;
+            for (uint32_t K = 0; K < N; ++K) {
+                const uintptr_t Rec = First + K * 0xA0;
+                if (*reinterpret_cast<uint64_t*>(Rec + 0x88) != Handle) continue;
+                Out->Rec = Rec;
+                Out->Map = *reinterpret_cast<int32_t*>(Block + 0x24);
+                Out->GenId = *reinterpret_cast<uint16_t*>(Rec + 0x68);
+                return true;
+            }
+        }
+        return false;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool ReadKillFactsSafe(uintptr_t Rec, KillFacts* F) {
+    __try {
+        F->Taken = *reinterpret_cast<uint8_t*>(Rec + 0x9A) != 0;
+        F->Lying = *reinterpret_cast<uint16_t*>(Rec + 0x96) != 0;
+        const uintptr_t Gen = Game<ObjFn>(kGenOfHandle)(Rec + 0x10);
+        if (!Gen) return false;
+        F->Limit = *reinterpret_cast<uint8_t*>(Gen + 0x8D);
+        const uintptr_t Row = *reinterpret_cast<uintptr_t*>(Gen + 0x58);
+        if (!Row) return false;
+        F->DeathFlag = *reinterpret_cast<int32_t*>(Row + 4);
+        F->RowBits = *reinterpret_cast<uint8_t*>(Row + 0x48);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void RememberOnceOnlyKill(const GeneratorDrop& D) {
+    KillFacts F{};
+    if (!ReadKillFactsSafe(D.Rec, &F)) {
+        LOG_INFO("[LOOT] an enemy's drop taken (generator %u of map %08X) -- its generator is unreadable", D.GenId,
+                 static_cast<uint32_t>(D.Map));
+        return;
+    }
+    const bool OnceOnly = F.Limit == 1 && F.DeathFlag == 0 && !(F.RowBits & 0x40);
+    if (!F.Taken || F.Lying || !OnceOnly) {
+        LOG_INFO("[LOOT] an enemy's drop taken (generator %u of map %08X: limit %u, death flag %d, row bits %02X, "
+                 "taken %d, lying %d) -- %s", D.GenId, static_cast<uint32_t>(D.Map), F.Limit, F.DeathFlag,
+                 F.RowBits, F.Taken ? 1 : 0, F.Lying ? 1 : 0,
+                 OnceOnly ? "not all of it is taken yet" : "it comes back anyway: nothing to remember");
+        return;
+    }
+    const std::string Owner = PlayerSync::GetInstance().GetLocalCharacterName();
+    if (Owner.empty()) return;
+    const uint32_t Cycle = CurrentCycle();
+    {
+        std::lock_guard<std::mutex> Lock(g_pendingMutex);
+        for (const Pending& E : g_pending) {
+            if (E.Kill && E.Owner == Owner && E.Area == static_cast<uint32_t>(D.Map) && E.Object == D.GenId) return;
+        }
+        Pending E;
+        E.Owner = Owner;
+        E.Area = static_cast<uint32_t>(D.Map);
+        E.Object = D.GenId;
+        E.Kill = true;
+        E.Cycle = Cycle;
+        g_pending.push_back(E);
+        SavePendingLocked();
+    }
+    LOG_INFO("[LOOT] a once-only enemy (generator %u of map %08X) killed here and its drop taken -- %s's own "
+             "world will have it dead too", D.GenId, static_cast<uint32_t>(D.Map), Owner.c_str());
+}
+
+bool AreaMapBySlotSafe(uintptr_t MapMgr, int32_t Slot, int32_t* Map) {
+    __try {
+        const uintptr_t Area = Game<AreaByIndexFn>(kAreaBySlot)(MapMgr, Slot);
+        if (!Area) return false;
+        *Map = *reinterpret_cast<int32_t*>(Area + 8);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// Counts one kill of `GenId` in this player's own slot for the area; false if that slot names
+// another map or anything faulted. Before/After are the kill counts read around it.
+bool CountHomeKillSafe(uintptr_t Store, int32_t Slot, int32_t Map, uint16_t GenId, uint32_t* Before, uint32_t* After) {
+    __try {
+        if (*reinterpret_cast<int32_t*>(Store + 8 + static_cast<uintptr_t>(Slot) * kKillSlotSize) != Map) return false;
+        *Before = static_cast<uint32_t>(Game<KillCountGetFn>(kKillCountGet)(Store, Slot, GenId) & 0xFF);
+        if (*Before == 0) Game<KillCountUpFn>(kKillCountUp)(Store, Slot, GenId);
+        *After = static_cast<uint32_t>(Game<KillCountGetFn>(kKillCountGet)(Store, Slot, GenId) & 0xFF);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 uint64_t __fastcall PickupDetour(uint64_t* DropHandle) {
     if (!DropHandle) return g_pickup(DropHandle);
     const uint64_t Handle = *DropHandle;
@@ -1149,6 +1297,9 @@ uint64_t __fastcall PickupDetour(uint64_t* DropHandle) {
     const bool HaveContents = ReadDropSafe(Handle, &Contents);
     PickupProbe P{};
     const bool Searched = FindDropSafe(Handle, &P);
+    GeneratorDrop EnemyDrop{};
+    const bool FromEnemy = Searched && !P.Found && g_ok.load() && g_enabled.load() && MultiplayerActiveSafe() &&
+                           FindGeneratorDropSafe(Handle, &EnemyDrop);
 
     const uint64_t Result = g_pickup(DropHandle);
 
@@ -1168,11 +1319,69 @@ uint64_t __fastcall PickupDetour(uint64_t* DropHandle) {
         } else if (SnapshotAfterSafe(&P)) {
             RememberPickup(P);
         }
+    } else if (FromEnemy) {
+        RememberOnceOnlyKill(EnemyDrop);
     } else if (Searched) {
         LOG_INFO("[LOOT] picked up a drop that is not a world item (enemy drop) -- nothing to remember");
     }
     return Result;
 }
+
+}  // namespace (reopened below)
+
+// Right before a map's generators are made in this player's own world: the once-only enemies
+// killed in someone else's world, counted here (guest_world.cpp calls this).
+void ApplyHomeKillsBeforeArea(void* GenMgr, int32_t AreaIndex) {
+    if (!GenMgr || AreaIndex < 0 || AreaIndex >= 0x2A || !g_ok.load() || !g_enabled.load() || g_broken.load()) return;
+    {
+        std::lock_guard<std::mutex> Lock(g_pendingMutex);
+        bool Any = false;
+        for (const Pending& E : g_pending) Any = Any || E.Kill;
+        if (!Any) return;
+    }
+    if (MultiplayerActiveSafe()) return;   // someone else's world: that count goes to the session slot
+    const std::string Owner = PlayerSync::GetInstance().GetLocalCharacterName();
+    const uintptr_t MapMgr = MapManager();
+    int32_t Map = 0;
+    if (Owner.empty() || !MapMgr || !AreaMapBySlotSafe(MapMgr, AreaIndex, &Map)) return;
+    const uintptr_t Store = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(GenMgr) + 0x10);
+    if (!Store) return;
+    const uint32_t Cycle = CurrentCycle();
+    std::lock_guard<std::mutex> Lock(g_pendingMutex);
+    bool Changed = false;
+    for (size_t I = 0; I < g_pending.size();) {
+        const Pending E = g_pending[I];
+        if (!E.Kill || E.Owner != Owner || E.Area != static_cast<uint32_t>(Map)) {
+            ++I;
+            continue;
+        }
+        if (E.Cycle && Cycle && E.Cycle != Cycle) {
+            LOG_INFO("[LOOT] once-only enemy %u of map %08X was killed in another NG cycle -- forgotten", E.Object,
+                     E.Area);
+            g_pending.erase(g_pending.begin() + static_cast<std::ptrdiff_t>(I));
+            Changed = true;
+            continue;
+        }
+        uint32_t Before = 0, After = 0;
+        if (!CountHomeKillSafe(Store, AreaIndex, Map, static_cast<uint16_t>(E.Object), &Before, &After)) {
+            LOG_WARNING("[LOOT] once-only enemy %u of map %08X: its kill could not be counted here (slot %d)",
+                        E.Object, E.Area, AreaIndex);
+            ++I;
+            continue;
+        }
+        LOG_INFO("[LOOT] once-only enemy %u of map %08X, killed in someone else's world: kill count here %u -> %u%s",
+                 E.Object, E.Area, Before, After, After ? " -- it stays dead, and its drop does not fall again" : "");
+        if (After) {
+            g_pending.erase(g_pending.begin() + static_cast<std::ptrdiff_t>(I));
+            Changed = true;
+            continue;
+        }
+        ++I;
+    }
+    if (Changed) SavePendingLocked();
+}
+
+namespace {
 
 // --- a chest opened at home and left full -------------------------------------------
 ChestLidFn g_chestLid = nullptr;
@@ -1184,6 +1393,7 @@ struct LeftoverFacts {
     uint32_t Lot;
     uint32_t Packed;
     bool     Put;
+    bool     Untouched;   // this player's own save never opened the chest
 };
 
 // The area a loaded object is in (0 when not found).
@@ -1246,8 +1456,13 @@ void PutChestLeftoversImpl(uintptr_t Box, PendingPod* Pend, int32_t PendCount, L
             }
         }
     }
+    // Never opened at home: no record, or one that was never rolled and never taken.
+    if (!Have || (!F->Lot && !(F->Packed & kPackedTaken))) {
+        F->Untouched = true;
+        return;
+    }
     // Rolled at home, taken bit clear, something still lying there.
-    if (!Have || !F->Lot || (F->Packed & kPackedTaken) || ((F->Packed >> 10) & 0x3FF) == 0) return;
+    if (!F->Lot || (F->Packed & kPackedTaken) || ((F->Packed >> 10) & 0x3FF) == 0) return;
     uint32_t Lot = F->Lot, Packed = F->Packed;
     Game<HandleRestoreFn>(kHandleRestore)(StateMgr, Obj, &Lot, &Packed);
     const uintptr_t Ctrl  = *reinterpret_cast<uintptr_t*>(Obj + 0xB8);
@@ -1255,6 +1470,22 @@ void PutChestLeftoversImpl(uintptr_t Box, PendingPod* Pend, int32_t PendCount, L
     const bool Enable = Model && ((*reinterpret_cast<uint8_t*>(Model + 0xE8) >> 1) & 1);
     Game<ChestRegFn>(kChestRegister)(Box, Enable ? 1 : 0);
     F->Put = true;
+}
+
+// The roll the game makes for a chest whose lid reaches the open states 90/120 with
+// nothing ever rolled or taken (exe+0x1D0520: checks the handle itself, then makes the drop
+// with this player's own dice).
+constexpr uint32_t kChestOpenRoll = 0x1D0520;   // (box component)
+
+bool RollChestSafe(uintptr_t Box, uint32_t* LotAfter) {
+    *LotAfter = 0;
+    __try {
+        Game<CompFn>(kChestOpenRoll)(Box);
+        *LotAfter = *reinterpret_cast<uint32_t*>(Box + kChestLotOff);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 bool PutChestLeftoversSafe(uintptr_t Box, PendingPod* Pend, int32_t PendCount, LeftoverFacts* F) {
@@ -1276,6 +1507,20 @@ void __fastcall ChestLidDetour(uintptr_t Box, uint8_t State) {
     LeftoverFacts F{};
     if (!PutChestLeftoversSafe(Box, Pods.data(), static_cast<int32_t>(Pods.size()), &F)) {
         LOG_WARNING("[LOOT] putting a chest's leftovers from your own save threw -- left as it is");
+        return;
+    }
+    // A chest the host opened that this player never opened at home (17.09, second report
+    // point 7: empty in the host's world, full at home). The host's lid arrives settled
+    // open (60/80), and those states roll nothing -- so it is rolled the way the open
+    // states 90/120 roll a never-opened chest, for this player. Its pickup is remembered
+    // like any other, so the chest at home is empty afterwards.
+    const uint32_t Settled = State / 10 * 10;
+    if (!F.Put && F.Untouched && (Settled == 60 || Settled == 80)) {
+        uint32_t LotAfter = 0;
+        const bool Rolled = RollChestSafe(Box, &LotAfter);
+        LOG_INFO("[LOOT] chest %u in area %u: the host's lid is open (%u), the chest empty here and never opened in "
+                 "your own world -- rolled for you: %s (lot %u)", F.Id, F.Area, State,
+                 Rolled ? (LotAfter ? "done" : "nothing came of it") : "threw", LotAfter);
         return;
     }
     if (!F.Put) return;

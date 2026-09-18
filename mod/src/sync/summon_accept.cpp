@@ -96,6 +96,11 @@ constexpr uint32_t kAreaRawId      = 0x3BA320;   // (area, &scratch) -> &raw map
 constexpr uint32_t kSignSpot       = 0x2A6240;   // (request, spot out) -> a spot for the sign by the game's rules
 constexpr uint32_t kSpotHere       = 0x29CF20;   // (spot out): the spot where the player stands, 0x24 bytes
 constexpr uint32_t kClearLive      = 0x2A3FC0;   // (manager, again): take the manager's live sign down
+constexpr uint32_t kTypeInMode     = 0x14ED40;   // (&mode, &phantom type) -> AL: table exe+0x1568810[mode*20 + type]
+constexpr uint32_t kArrivalTypeRet = 0x2C4651;   // return address of that call in join state 6 (exe+0x2C45B0)
+constexpr uint32_t kSlotConfirm    = 0x2D2F70;   // (summon slots, type, id, flag) -> AL: the slot reserved for it
+constexpr uint32_t kSlotReserve    = 0x2D35F0;   // (summon slots, type, id): reserve one
+constexpr uint32_t kSlotConfirmRet = 0x2C0434;   // the accept controller's state 0xF (exe+0x2C03E0, via exe+0x2C08C0)
 constexpr uint32_t kGameManagerImp = 0x16148F0;  // *(exe+...) = GameManagerImp; +0x38 map manager
 constexpr uint32_t kNetRoot        = 0x1616CF8;  // *(exe+...) = network root; +0x18 multiplayer manager
 constexpr int      kCapSummoned    = 0xD;        // "can be summoned through a sign"
@@ -135,6 +140,20 @@ void* g_busyUpOriginal     = nullptr;
 void* g_busyDownOriginal   = nullptr;
 void* g_mpAllowedOriginal  = nullptr;
 void* g_signSpotOriginal   = nullptr;
+
+// Join state 6 (exe+0x2C45B0), the last step before a guest stands in the host's world,
+// asks exe+0x14ED40(&mode, &phantom type) -- a byte table at exe+0x1568810, 20 phantom
+// types per mode, mode = [[GMImp+0xD0]+0x490]+0x1AD, the byte after the hollowing level
+// (rows 1 and 8 allow no type 1 or 2, the white phantoms; row 0 allows 0,1,2,7,8,12,14).
+// A "no" -- or 20 s spent in state 6 -- writes code 0xF, leaves the network session
+// (exe+0x5205D0) and goes to state 7 anyway, where exe+0x2C385C throws the guest out on
+// its first frame. On 17.09 the guest was thrown out that way six times, each in the
+// second it arrived (16:45:19, 16:45:45, 16:46:11, 16:49:19, 17:43:46, 17:44:13), and the
+// host's accept controller ended in the same second; what stored the code is not in the
+// log. For the lobby partner's join this check answers yes, and every call from state 6
+// is logged with its numbers, so the next log says whether this was it.
+using TypeInModeFn = uint64_t(__fastcall*)(const int32_t*, const uint8_t*);
+void* g_typeInModeOriginal = nullptr;
 
 std::atomic<ULONGLONG> g_armedUntil{ 0 };
 std::atomic<bool>      g_replaceWhenFree{ false };   // a summon was declined while busy
@@ -383,6 +402,115 @@ void __fastcall SummonPushDetour(void* Listener, const uint8_t* Push) {
     }
 }
 
+bool ReadModeAndType(const int32_t* Mode, const uint8_t* Type, int32_t* ModeOut, uint32_t* TypeOut) {
+    __try {
+        *ModeOut = *Mode;
+        *TypeOut = *Type;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// A guest thrown out right on arrival (17.09: six times, and endlessly at the Cathedral of Blue
+// bonfire, 0.2.2 report point 4; and whenever the host crossed into another area while the guest
+// joined, point 10). The host's accept controller, in state 0xF, confirms the summon slot it
+// reserved when it was built (exe+0x2C0980 -> exe+0x2D35F0, result ignored): exe+0x2C08C0 jumps to
+// exe+0x2D2F70. The reservations follow the host's online "mode" ([[mp+0x38]+0x10], applied every
+// tick by exe+0x2C09A0), and a change of mode keeps only what the new one allows -- white summons
+// are allowed in modes 3, 8, 13 and 14 only. So a summon started where the area's slot check said
+// no (the mod lets that through, "this area's slot check said no", four of the six), or a host who
+// walked across a border between summon and arrival (the other two, 8.9 and 10.9 m), had no
+// reservation left: the confirm said no, code 1 went to the guest, and its join state 6 threw it
+// out. The slot is reserved again here and asked once more; if the game still says no, the co-op
+// lobby's join goes through anyway, as the rest of the summon does (ini join_slot_confirm).
+using SlotConfirmFn = uint64_t(__fastcall*)(void*, uint32_t, uint32_t, uint32_t);
+using SlotReserveFn = void(__fastcall*)(void*, uint32_t, uint32_t);
+void* g_slotConfirmOriginal = nullptr;
+std::atomic<bool> g_slotConfirmFix{ true };
+
+bool ReserveAgainSafe(void* Slots, uint32_t Type, uint32_t Id) {
+    __try {
+        reinterpret_cast<SlotReserveFn>(ExeBase() + kSlotReserve)(Slots, Type, Id);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// The host's online mode record [[mp+0x38]]: +8, +0xC and the mode at +0x10.
+bool ReadOnlineModeSafe(int32_t* A, int32_t* B, int32_t* Mode) {
+    __try {
+        const uintptr_t Root = *reinterpret_cast<const uintptr_t*>(ExeBase() + kNetRoot);
+        const uintptr_t Mp = Root ? *reinterpret_cast<const uintptr_t*>(Root + 0x18) : 0;
+        const uintptr_t Rec = Mp ? *reinterpret_cast<const uintptr_t*>(Mp + 0x38) : 0;
+        if (!Rec) return false;
+        *A = *reinterpret_cast<const int32_t*>(Rec + 8);
+        *B = *reinterpret_cast<const int32_t*>(Rec + 0xC);
+        *Mode = *reinterpret_cast<const int32_t*>(Rec + 0x10);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+uint64_t __fastcall SlotConfirmDetour(void* Slots, uint32_t Type, uint32_t Id, uint32_t Flag) {
+    const auto Original = reinterpret_cast<SlotConfirmFn>(g_slotConfirmOriginal);
+    const uint64_t Stock = Original(Slots, Type, Id, Flag);
+    if ((Stock & 0xFF) || reinterpret_cast<uintptr_t>(_ReturnAddress()) != ExeBase() + kSlotConfirmRet) return Stock;
+    if (!DS2Coop::Hooks::ProtobufHooks::IsSeamlessActive()) return Stock;
+    int32_t A = 0, B = 0, Mode = -1;
+    ReadOnlineModeSafe(&A, &B, &Mode);
+    float X = 0.0f, Y = 0.0f, Z = 0.0f, Rot = 0.0f;
+    GetLocalPlayerPosition(X, Y, Z, Rot);
+    if (!g_slotConfirmFix.load()) {
+        LOG_INFO("[JOIN] a guest's arrival: summon slot (type %u, id %u) not confirmed by the game -- online mode %d "
+                 "(%d, %d) at (%.1f, %.1f, %.1f); left as the game has it (join_slot_confirm=false): the guest is "
+                 "thrown out", Type & 0xFF, Id, Mode, A, B, X, Y, Z);
+        return Stock;
+    }
+    const bool Reserved = ReserveAgainSafe(Slots, Type & 0xFF, Id);
+    const uint64_t Again = Reserved ? Original(Slots, Type, Id, Flag) : 0;
+    LOG_INFO("[JOIN] a guest's arrival: summon slot (type %u, id %u) not confirmed by the game -- online mode %d "
+             "(%d, %d) at (%.1f, %.1f, %.1f); %s", Type & 0xFF, Id, Mode, A, B, X, Y, Z,
+             (Again & 0xFF) ? "reserved again and confirmed"
+             : Reserved     ? "still refused after reserving again -- let through: the co-op lobby's join"
+                            : "reserving again threw -- let through: the co-op lobby's join");
+    if (Again & 0xFF) return Again;
+    return (Stock & ~static_cast<uint64_t>(0xFF)) | 1;
+}
+
+// Probe: the host's online mode whenever it changes, with where the host stands -- the borders
+// where a reservation can be dropped between a summon and the guest's arrival.
+void ModeWatchTick() {
+    if (!DS2Coop::Hooks::ProtobufHooks::IsSeamlessActive()) return;
+    static int32_t s_mode = -2;
+    int32_t A = 0, B = 0, Mode = -1;
+    if (!ReadOnlineModeSafe(&A, &B, &Mode) || Mode == s_mode) return;
+    float X = 0.0f, Y = 0.0f, Z = 0.0f, Rot = 0.0f;
+    GetLocalPlayerPosition(X, Y, Z, Rot);
+    LOG_INFO("[JOIN] online mode here: %d -> %d (%d, %d) at (%.1f, %.1f, %.1f)", s_mode, Mode, A, B, X, Y, Z);
+    s_mode = Mode;
+}
+
+uint64_t __fastcall TypeInModeDetour(const int32_t* Mode, const uint8_t* Type) {
+    const uint64_t Stock = reinterpret_cast<TypeInModeFn>(g_typeInModeOriginal)(Mode, Type);
+    if (reinterpret_cast<uintptr_t>(_ReturnAddress()) != ExeBase() + kArrivalTypeRet) return Stock;
+    int32_t M = -1;
+    uint32_t T = 0;
+    ReadModeAndType(Mode, Type, &M, &T);
+    const bool Lobby = DS2Coop::Hooks::ProtobufHooks::IsSeamlessActive();
+    const bool Allowed = (Stock & 0xFF) != 0;
+    static std::atomic<uint32_t> s_lines{ 0 };
+    if (!Allowed || s_lines.fetch_add(1) < 6) {
+        LOG_INFO("[JOIN] arriving (join state 6): phantom type %u in mode %d is %s%s", T, M,
+                 Allowed ? "allowed" : "NOT allowed by the game's table",
+                 !Allowed && Lobby ? " -- let through: the co-op lobby's join (otherwise thrown out on arrival)" : "");
+    }
+    if (Allowed || !Lobby) return Stock;
+    return (Stock & ~static_cast<uint64_t>(0xFF)) | 1;
+}
+
 bool HookAt(uint32_t Rva, void* Detour, void** Original, const char* What) {
     if (DS2Coop::Hooks::HookManager::GetInstance().InstallHook(
             reinterpret_cast<void*>(ExeBase() + Rva), Detour, Original)) {
@@ -412,6 +540,14 @@ bool InstallSummonAccept() {
     }
     if (!g_signSpotOriginal) {
         HookAt(kSignSpot, reinterpret_cast<void*>(&SignSpotDetour), &g_signSpotOriginal, "sign spot lookup");
+    }
+    if (!g_typeInModeOriginal) {
+        HookAt(kTypeInMode, reinterpret_cast<void*>(&TypeInModeDetour), &g_typeInModeOriginal,
+               "the phantom-type table (join arrival)");
+    }
+    if (!g_slotConfirmOriginal) {
+        HookAt(kSlotConfirm, reinterpret_cast<void*>(&SlotConfirmDetour), &g_slotConfirmOriginal,
+               "the summon slot confirm (a guest's arrival)");
     }
     // Probes: they only count.
     if (!g_busyUpOriginal) {
@@ -460,8 +596,32 @@ bool ClearStaleLiveSign(void* Manager) {
     return true;
 }
 
+// The sign manager's live sign, taken down once the server has given it an id:
+// exe+0x2A3FC0(manager, 0) is the game's own removal (its sign tick exe+0x2A4460
+// calls it the same way). With an id it sends RequestRemoveSign and clears the
+// manager; asked before the id is there it would only clear the manager and leave
+// the sign on the server, with the create's answer still to come -- so it waits.
+PlacedSignTakeDown TakeDownPlacedSign(void* Manager) {
+    if (!Manager) return PlacedSignTakeDown::NoSign;
+    uint8_t Live = 0;
+    uint32_t Id = 0;
+    if (!ReadLiveSign(reinterpret_cast<uintptr_t>(Manager), &Live, &Id) || !Live) return PlacedSignTakeDown::NoSign;
+    if (!Id) return PlacedSignTakeDown::NotCreatedYet;
+    if (!CallClearLive(Manager)) {
+        LOG_WARNING("[PLACE] taking sign %u down threw", Id);
+        return PlacedSignTakeDown::Failed;
+    }
+    LOG_INFO("[PLACE] sign %u taken down (exe+0x2A3FC0)", Id);
+    return PlacedSignTakeDown::TakenDown;
+}
+
+void SetJoinSlotConfirm(bool On) {
+    g_slotConfirmFix.store(On);
+}
+
 void SummonAcceptGameTick() {
     BusyWatchTick();
+    ModeWatchTick();
     if (!g_replaceWhenFree.load()) return;
     const ULONGLONG Now = GetTickCount64();
     if (IsSummonBusy()) {

@@ -386,25 +386,45 @@ static void SaveMapOrigins() {
     fclose(f);
 }
 
-// The game's own per-map origin, out of the map data itself.
+// The game's own per-map origin: the one its sign encoder subtracts.
 //
-// exe+0x2A9E70(onlineAreaId, in[4], out[4]) writes in - origin and answers 0
-// when it cannot resolve the area; the origin it subtracts lives at
-// *(area+0x148)+0x2F0..0x2F8 as three floats. Called with a zero vector it
-// therefore hands back -origin, and it needs nothing but the area id.
+// exe+0x210730(spot, out) turns a spot {raw map id, x, y, z} into what a sign
+// carries. It finds the area with exe+0x3BCE40([GMImp+0x38], raw map id), takes
+// the block at area+0x148 and subtracts the three floats at +0x2F0..+0x2F8
+// (SUBPS at exe+0x2107BD). The same floats read here are the origin a sign in
+// that map is measured against -- for a map loaded on this machine, which the
+// one this player stands in always is.
 //
-// None of that is taken on faith. Before it is used for a map nobody has stood
-// in, it is asked for the two maps measured by hand and is only trusted if it
-// reproduces both within 0.1 -- the 16-bit field on the wire has a step of
-// 1/32, so anything closer than that is the same number. The comparison happens
-// in the game, with real numbers, and goes into the log either way.
+// exe+0x2A9E70 was asked before, and in every session in both players' logs it
+// never answered once -- not even for 10100000 with the host standing in it
+// (17.09 15:00). So the host kept putting a sign of its own down in every new
+// map to measure it, and that sign stayed under its feet after the eagle flight
+// (0.2.2 point 10). A measurement from a sign is also only as good as the spot
+// the game picked: where it takes a region's spot instead of the player's feet,
+// "my position minus the sign" is not the origin, and 10100000 went from
+// (208, 10, -133) to (0, 0, 0) and (241, 11, -132) that way (17.09, host log).
+//
+// Still not taken on faith. Before it is used for a map nobody has stood in, it
+// is compared with maps whose origin is known -- two measured by hand, three
+// measured by both players independently, on different days, to the same 0.03 --
+// and trusted only if it reproduces one within 0.1 (the field on the wire has a
+// step of 1/32) with none disagreeing. A sign of this player's own that matches
+// it trusts it too. The comparison happens in the game, with real numbers, and
+// goes into the log either way.
 //
 // Game thread only (the sign tick and the sign creation): it walks the map
 // manager. The packet from the other player never comes through here.
-constexpr uint32_t kMapOriginQuery = 0x2A9E70;
-using MapOriginQueryFn = uint8_t(__fastcall*)(uint32_t, const float*, float*);
+constexpr uint32_t kGameManagerImpRva = 0x16148F0;   // *(exe+...) = GameManagerImp; +0x38 map manager
+constexpr uint32_t kAreaByRawId       = 0x3BCE40;    // (map manager, raw map id) -> area, or 0
+using AreaByRawIdFn = uintptr_t(__fastcall*)(uintptr_t, uint32_t);
 
 static std::atomic<int> g_gameOriginTrust{ 0 };   // 0 not checked yet, 1 trusted, -1 no
+
+// 10160000 -> 0x0A100000.
+static uint32_t RawMapId(uint32_t area) {
+    return ((area / 1000000u) & 0xFF) << 24 | ((area / 10000u % 100u) & 0xFF) << 16 |
+           ((area / 100u % 100u) & 0xFF) << 8 | (area % 100u & 0xFF);
+}
 
 // Maps whose origin was established in this run -- by the game itself or by a
 // sign of this player's own, in that map. Anything else is hearsay off the disk,
@@ -416,28 +436,40 @@ static std::unordered_map<uint32_t, bool> g_originMeasuredHere;
 static bool QueryGameMapOrigin(uint32_t area, MapOrigin* out) {
     if (!area || !out) return false;
     __try {
-        const float in[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-        float got[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
         const uintptr_t base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
-        if (!reinterpret_cast<MapOriginQueryFn>(base + kMapOriginQuery)(area, in, got)) return false;
+        const uintptr_t gm = *reinterpret_cast<const uintptr_t*>(base + kGameManagerImpRva);
+        const uintptr_t mapMgr = gm ? *reinterpret_cast<const uintptr_t*>(gm + 0x38) : 0;
+        if (!mapMgr) return false;
+        const uintptr_t found = reinterpret_cast<AreaByRawIdFn>(base + kAreaByRawId)(mapMgr, RawMapId(area));
+        const uintptr_t block = found ? *reinterpret_cast<const uintptr_t*>(found + 0x148) : 0;
+        if (!block) return false;
+        const float* got = reinterpret_cast<const float*>(block + 0x2F0);
         for (int i = 0; i < 3; i++) {
             if (!(got[i] == got[i]) || got[i] > 1.0e6f || got[i] < -1.0e6f) return false;
         }
-        out->x = -got[0];
-        out->y = -got[1];
-        out->z = -got[2];
+        out->x = got[0];
+        out->y = got[1];
+        out->z = got[2];
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
 }
 
+static bool SameOrigin(const MapOrigin& a, const MapOrigin& b) {
+    return fabsf(a.x - b.x) < 0.1f && fabsf(a.y - b.y) < 0.1f && fabsf(a.z - b.z) < 0.1f;
+}
+
 static void CheckGameOriginOnce() {
     if (g_gameOriginTrust.load() != 0) return;
     struct Known { uint32_t Area; float X, Y, Z; };
+    // Majula (0, 0, 0) is left out on purpose: a block of zeros would pass for it.
     static const Known known[] = {
-        { 10310000u, -13.98f, -15.02f, 163.02f },
-        { 10100000u, 207.99f,  10.00f, -133.02f },
+        { 10310000u,  -13.98f, -15.02f,  163.02f },   // by hand
+        { 10100000u,  207.99f,  10.00f, -133.02f },   // by hand
+        { 10160000u,  -77.99f,   4.02f,  562.00f },   // host 17.09 15:11:57, guest in an earlier session
+        { 10180000u,   51.99f, -69.97f,  486.98f },   // host 17.09 14:43:40, guest in an earlier session
+        { 10020000u, -497.99f,  29.98f, -259.98f },   // host 00:28:46, guest 00:28:55, each its own sign
     };
     // Per map, and never all-or-nothing. Demanding both of them at once is what
     // made this whole check dead code: the query only answers for a map whose
@@ -451,8 +483,8 @@ static void CheckGameOriginOnce() {
         MapOrigin got{};
         if (!QueryGameMapOrigin(k.Area, &got)) continue;   // that map is not loaded: try the next
         ++resolved;
-        const bool ok = fabsf(got.x - k.X) < 0.1f && fabsf(got.y - k.Y) < 0.1f && fabsf(got.z - k.Z) < 0.1f;
-        LOG_INFO("[SIGN] the game puts map %u origin at (%.2f, %.2f, %.2f); measured by hand (%.2f, %.2f, %.2f) -- %s",
+        const bool ok = SameOrigin(got, MapOrigin{ k.X, k.Y, k.Z });
+        LOG_INFO("[SIGN] the game puts map %u origin at (%.2f, %.2f, %.2f); known as (%.2f, %.2f, %.2f) -- %s",
                  k.Area, got.x, got.y, got.z, k.X, k.Y, k.Z, ok ? "same" : "DIFFERENT");
         if (ok) ++matched; else ++wrong;
     }
@@ -460,17 +492,44 @@ static void CheckGameOriginOnce() {
         static bool told = false;
         if (!told) {
             told = true;
-            LOG_INFO("[SIGN] the game cannot resolve either of the maps measured by hand yet -- "
-                     "stored origins until it can");
+            LOG_INFO("[SIGN] none of the maps with a known origin is loaded yet -- the game's origins are not "
+                     "used until one is (or until a sign of mine matches)");
         }
-        return;   // ask again on the next sign
+        return;   // ask again next time
     }
     const bool trust = wrong == 0 && matched > 0;
     g_gameOriginTrust.store(trust ? 1 : -1);
-    LOG_INFO("[SIGN] origins read from the game are %s (%d of %zu maps measured by hand could be checked)",
-             trust ? "trusted -- a sign can be aimed into a map nobody here has stood in"
+    LOG_INFO("[SIGN] origins read from the game are %s (%d of %zu maps with a known origin could be checked)",
+             trust ? "trusted -- no sign of my own is needed to measure a map"
                    : "NOT trusted -- only maps measured here or sent by the other player",
              resolved, sizeof(known) / sizeof(known[0]));
+}
+
+// A sign of this player's own was just written in `area`, and `measured` is
+// "my position minus the sign". Where the game put the sign at the player's feet
+// that is the origin exactly, so it agreeing with the game's own number trusts
+// the game's number; where the game used a region's spot it is not the origin,
+// so disagreeing proves nothing and only goes into the log.
+static void CompareGameOriginWithSign(uint32_t area, const MapOrigin& measured) {
+    MapOrigin fromGame{};
+    if (!QueryGameMapOrigin(area, &fromGame)) {
+        LOG_INFO("[SIGN] map %u: the game gives no origin to compare my sign with", area);
+        return;
+    }
+    const bool same = SameOrigin(fromGame, measured);
+    LOG_INFO("[SIGN] map %u: the game's origin (%.2f, %.2f, %.2f), from my sign (%.2f, %.2f, %.2f) -- %s",
+             area, fromGame.x, fromGame.y, fromGame.z, measured.x, measured.y, measured.z,
+             same ? "same" : "different (the sign may be at a region's spot, not at my feet)");
+    // A zero origin proves nothing, for the same reason Majula is left out of the
+    // known maps above: a block of zeros would pass for it.
+    if (same && SameOrigin(fromGame, MapOrigin{ 0.0f, 0.0f, 0.0f })) {
+        LOG_INFO("[SIGN] map %u: both say (0, 0, 0) -- not taken as proof that the game's origins are right", area);
+        return;
+    }
+    int expected = 0;
+    if (same && g_gameOriginTrust.compare_exchange_strong(expected, 1)) {
+        LOG_INFO("[SIGN] origins read from the game are trusted -- my own sign agrees with it");
+    }
 }
 
 // The origin to aim a sign into a map with. The game's own answer comes first,
@@ -497,14 +556,27 @@ static bool LookupMapOrigin(uint32_t area, MapOrigin* out) {
     }
     CheckGameOriginOnce();
     MapOrigin fromGame{};
-    if (g_gameOriginTrust.load() == 1 && QueryGameMapOrigin(area, &fromGame)) {
-        const bool same = haveStored && fabsf(stored.x - fromGame.x) < 0.1f &&
-                          fabsf(stored.y - fromGame.y) < 0.1f && fabsf(stored.z - fromGame.z) < 0.1f;
+    const bool gameAnswers = QueryGameMapOrigin(area, &fromGame);
+    if (gameAnswers && g_gameOriginTrust.load() == 0) {
+        // Not used yet, only logged: what the next test needs to see (once per map).
+        static std::unordered_map<uint32_t, bool> told;
+        if (!told[area]) {
+            told[area] = true;
+            LOG_INFO("[SIGN] map %u: the game says its origin is (%.2f, %.2f, %.2f), stored %s -- not used "
+                     "until checked", area, fromGame.x, fromGame.y, fromGame.z,
+                     haveStored ? (SameOrigin(stored, fromGame) ? "the same" : "DIFFERENT") : "nothing");
+        }
+    }
+    if (gameAnswers && g_gameOriginTrust.load() == 1) {
+        const bool same = haveStored && SameOrigin(stored, fromGame);
         {
+            // Called every frame: the file is written only when the number changes.
             std::lock_guard<std::mutex> lock(g_originMutex);
-            g_mapOrigins[area] = fromGame;
             g_originMeasuredHere[area] = true;
-            SaveMapOrigins();
+            if (!same) {
+                g_mapOrigins[area] = fromGame;
+                SaveMapOrigins();
+            }
         }
         if (!haveStored) {
             LOG_INFO("[SIGN] map %u origin read from the game: (%.2f, %.2f, %.2f)",
@@ -549,6 +621,18 @@ static void NoteAreaFromSignListRequest(const uint8_t* data, size_t len) {
         LOG_INFO("[SIGN] now in map %u", area);
     }
 }
+
+// The map a RequestCreateSign puts the sign into: field 1, a varint (10160000 in
+// "08 80 8F EC 04", 17.09 15:11:57). 0 when the message does not start with it.
+static uint32_t ReadSignArea(const uint8_t* data, size_t len) {
+    if (!data || len < 2 || data[0] != 0x08) return 0;
+    size_t off = 1;
+    return static_cast<uint32_t>(ReadVarint(data, len, off));
+}
+
+// Set by the sign tick around its own call that puts a sign down only to measure
+// the map (player_sync.cpp, ProbeOwnMapOrigin); the message is built inside that call.
+static std::atomic<bool> g_signIsProbe{ false };
 
 static void AimSignAtOtherPlayer(uint8_t* data, size_t len);
 
@@ -688,8 +772,9 @@ static uint8_t* __fastcall SerializeHook(void* thisPtr, uint8_t* target) {
 
         // Tell the other player straight away. Their client polls for signs on
         // its own schedule, which is about a minute, and that minute is the
-        // whole reason a sign can take that long to show up.
-        {
+        // whole reason a sign can take that long to show up. Not for a sign that
+        // only measures the map: nobody is meant to see that one.
+        if (!g_signIsProbe.load()) {
             DS2Coop::Network::PacketHeader Ping{};
             Ping.magic = 0x44533243;
             Ping.type = DS2Coop::Network::PacketType::SignPlaced;
@@ -775,6 +860,8 @@ void SetSignUnderFeet(bool enable) {
     g_signUnderFeet.store(enable);
     LOG_INFO("[SIGN] under-feet relocation %s", enable ? "ON" : "OFF");
 }
+void SetSignProbe(bool probe) { g_signIsProbe.store(probe); }
+bool IsGameOriginTrusted() { return g_gameOriginTrust.load() == 1; }
 bool GetSignUnderFeet() { return g_signUnderFeet.load(); }
 uint32_t GetLocalAreaId() { return g_localAreaId.load(); }
 uint32_t GetSignListRequestCount() { return g_signListRequests.load(); }
@@ -945,15 +1032,22 @@ static void AimSignAtOtherPlayer(uint8_t* data, size_t len) {
     // game cannot say it itself. Measuring it from a sign whose spot the mod had
     // to invent produced the player's own position instead of an origin, and
     // that wrong number is what kept summoning the guest off the map in Majula.
+    // A sign the game wrote into another map (field 1 of the message) measures
+    // nothing about the map this player stands in.
     const uint32_t myArea = g_localAreaId.load();
-    if (myArea) {
+    const uint32_t signArea = ReadSignArea(data, len);
+    if (myArea && signArea && signArea != myArea) {
+        LOG_INFO("[SIGN] the game wrote this sign into map %u, not map %u where I stand -- no origin measured",
+                 signArea, myArea);
+    } else if (myArea) {
+        const MapOrigin o{ mx - sx / kScale, my - sy / kScale, mz - sz / kScale };
         CheckGameOriginOnce();
+        CompareGameOriginWithSign(myArea, o);
         MapOrigin fromGame{};
         const bool gameKnows = g_gameOriginTrust.load() == 1 && QueryGameMapOrigin(myArea, &fromGame);
         if (!gameKnows) {
             std::lock_guard<std::mutex> lock(g_originMutex);
             LoadMapOrigins();
-            const MapOrigin o{ mx - sx / kScale, my - sy / kScale, mz - sz / kScale };
             auto it = g_mapOrigins.find(myArea);
             const bool isNew = (it == g_mapOrigins.end());
             g_mapOrigins[myArea] = o;
@@ -962,6 +1056,13 @@ static void AimSignAtOtherPlayer(uint8_t* data, size_t len) {
                                 myArea, o.x, o.y, o.z);
             SaveMapOrigins();
         }
+    }
+
+    // A sign put down only to measure the map is nobody's to summon: aimed at the
+    // other player it would stand under their feet instead (0.2.2 point 10).
+    if (g_signIsProbe.load()) {
+        LOG_INFO("[SIGN] a sign to measure the map with -- not aimed at anyone, taken down once the server has it");
+        return;
     }
 
     if (!g_signUnderFeet.load()) return;

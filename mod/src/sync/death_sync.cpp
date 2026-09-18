@@ -95,6 +95,9 @@ constexpr int kBranchDutyDone   = 1;              // phantom branch reason: the 
 constexpr uint32_t kResultLeaving  = 0xCE;        // EventResult: a sequence that ends in leaving; new records dropped
 constexpr uint32_t kResultFrozen   = 0xCF;        // EventResult: set when such a sequence ends; no updates after
 constexpr int32_t  kResultBossKilled = 0x12;      // result code of a boss kill
+constexpr int32_t  kResultHostDied   = 4;         // result code "the world's host died"
+constexpr int      kLeaveHostDied    = 3;         // the reason that result hands the join controller (exe+0x2C9220)
+constexpr ULONGLONG kHostDeadUnseenMs = 3000;     // the host dead this long with no result of the game's own here
 constexpr ULONGLONG kHostKillFreshMs  = 30000;    // a kill the host reported counts this long here
 constexpr ULONGLONG kHostEndGraceMs   = 5000;     // a fight that ended with no kill heard of: wait this long
 constexpr ULONGLONG kHostKillRepeatMs = 10000;    // the host repeats a kill this long after the fight is over
@@ -124,6 +127,7 @@ constexpr float     kBesideBonfire      = 1.5f;   // metres from the bonfire, to
 // No PlayerCtrl (loading). A dead player's HP goes below zero -- -910 for ee at
 // 22:22:57 -- so dead is "<= 0", and "none" needs a value no HP can take.
 constexpr int32_t kNoHp = INT32_MIN;
+constexpr ULONGLONG kPayOutMs = 20000;   // how long a guest's copy may keep the hold while paying out
 
 using BranchFn  = void(__fastcall*)(void*, int);
 using BonfireFn = void(__fastcall*)(void*, const int32_t*);
@@ -173,6 +177,7 @@ std::atomic<int32_t>   g_hostEndedBattle{ 0 };      // guest: the host's fight w
 std::atomic<ULONGLONG> g_hostEndedAt{ 0 };
 std::atomic<int32_t>   g_guestKilled{ 0 };          // guest: the fight driven to its end here
 std::atomic<ULONGLONG> g_guestKilledAt{ 0 };
+std::atomic<ULONGLONG> g_hostDeathResultAt{ 0 };    // guest: the game here built a "host died" result
 void*                  g_phaseTwoOriginal = nullptr;
 
 // The executable's base never moves: asked for once, not every frame.
@@ -675,6 +680,45 @@ void TellGuestHostTravelled(int32_t RawMap, int32_t Bonfire) {
              RawMapToArea(RawMap));
 }
 
+// A travel target as a player would say it: the bonfire's own name (the game's text,
+// category BonfireName), else the map's, else numbers. Game thread.
+std::string TravelPlaceName(int32_t RawMap, int32_t Target, int32_t Type) {
+    const std::string Map = GameMapName(RawMap);
+    char Buffer[192];
+    if (Type == 3) {
+        const std::string Bonfire = GameBonfireName(Target);
+        if (!Bonfire.empty()) {
+            std::snprintf(Buffer, sizeof(Buffer), "%s \xC2\xAB%s\xC2\xBB", UI::Tr("bonfire", "костёр"), Bonfire.c_str());
+        } else {
+            std::snprintf(Buffer, sizeof(Buffer), "%s %d", UI::Tr("bonfire", "костёр"), Target);
+        }
+        if (!Map.empty() && Bonfire != Map) {
+            const size_t Used = std::strlen(Buffer);
+            std::snprintf(Buffer + Used, sizeof(Buffer) - Used, " (%s)", Map.c_str());
+        }
+    } else if (!Map.empty()) {
+        std::snprintf(Buffer, sizeof(Buffer), "%s", Map.c_str());
+    } else {
+        std::snprintf(Buffer, sizeof(Buffer), "%s %u", UI::Tr("map", "карта"), RawMapToArea(RawMap));
+    }
+    return Buffer;
+}
+
+// Where this player just travelled, for the partner's notification (both roles).
+void TellPartnerITravelled(int32_t RawMap, int32_t Target, int32_t Type) {
+    if (!Session::SessionManager::GetInstance().IsActive()) return;
+    if (Network::PeerManager::GetInstance().GetPeers().empty()) return;
+    Network::PlayerTravelledPacket Packet{};
+    Packet.header.magic = 0x44533243;
+    Packet.header.type = Network::PacketType::PlayerTravelled;
+    Packet.header.size = sizeof(Packet);
+    Packet.header.timestamp = GetTickCount64();
+    Packet.map = RawMap;
+    Packet.target = Target;
+    Packet.type = Type;
+    Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
+}
+
 // A guest still on its way into the host's world: an accept controller that has
 // not reached state 0x10. A host warp now would make it drop the guest with code 6
 // on the spot (accept slot E0, reason 4, when slot 88 says "not fully in").
@@ -745,6 +789,7 @@ uint64_t __fastcall RequestWarpDetour(void* Gm, const int32_t* Request, uint64_t
         ResetEnemySyncForHostWarp();
         NoteLocalTravel(F[2]);
         if (!Guest) TellGuestHostTravelled(F[2], F[6]);
+        TellPartnerITravelled(F[2], F[6], F[0]);
     }
     if (!Readable) {
         LOG_INFO("[DEATH] warp requested (request unreadable), multiplayer %u -> %s (from exe+0x%llX)",
@@ -803,6 +848,72 @@ void __fastcall AcceptEventDetour(void* Ctrl, int Reason) {
     reinterpret_cast<AcceptEventFn>(g_acceptEventOriginal)(Ctrl, Reason);
 }
 
+// Probe (host): every guest's accept controller ([mp+0x48..0x50]), each change of its
+// state (+0x150) or code (+0x198), with the multiplayer manager's two busy counters
+// ([mp+8], [mp+9]). Its state 10 ends the guest's join with code 6 while [mp+9] is up
+// (exe+0x2BF440), and on 17.09 a guest was thrown out on arrival six times with the host's
+// controller gone in the same second -- the code it ended with was never logged.
+struct AcceptSeen {
+    uintptr_t Ctrl;
+    int32_t   State;
+    int32_t   Code;
+};
+AcceptSeen g_acceptSeen[4] = {};
+
+int ReadAcceptControllersSafe(uintptr_t* Ctrls, int Max, uint8_t* Busy1, uint8_t* Busy2) {
+    int Count = 0;
+    __try {
+        const uintptr_t Root = *reinterpret_cast<const uintptr_t*>(ExeBase() + kNetRoot);
+        const uintptr_t Mp = Root ? *reinterpret_cast<const uintptr_t*>(Root + 0x18) : 0;
+        if (!Mp) return 0;
+        *Busy1 = *reinterpret_cast<const uint8_t*>(Mp + 8);
+        *Busy2 = *reinterpret_cast<const uint8_t*>(Mp + 9);
+        uintptr_t It = *reinterpret_cast<const uintptr_t*>(Mp + 0x48);
+        const uintptr_t End = *reinterpret_cast<const uintptr_t*>(Mp + 0x50);
+        for (; It && It < End && Count < Max; It += 8) {
+            const uintptr_t Ctrl = *reinterpret_cast<const uintptr_t*>(It);
+            if (Ctrl) Ctrls[Count++] = Ctrl;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return Count;
+}
+
+void AcceptProbeTick() {
+    auto& Lobby = Session::SessionManager::GetInstance();
+    if (!Lobby.IsActive() || !Lobby.IsHost()) return;
+    uintptr_t Ctrls[4] = {};
+    uint8_t Busy1 = 0, Busy2 = 0;
+    const int Count = ReadAcceptControllersSafe(Ctrls, 4, &Busy1, &Busy2);
+    AcceptSeen Now[4] = {};
+    for (int I = 0; I < Count; ++I) {
+        Now[I].Ctrl = Ctrls[I];
+        Now[I].State = -1;
+        Now[I].Code = -1;
+        ReadI32(Ctrls[I] + 0x150, &Now[I].State);
+        ReadI32(Ctrls[I] + 0x198, &Now[I].Code);
+        const AcceptSeen* Was = nullptr;
+        for (const AcceptSeen& S : g_acceptSeen) {
+            if (S.Ctrl == Ctrls[I]) Was = &S;
+        }
+        if (!Was || Was->State != Now[I].State || Was->Code != Now[I].Code) {
+            LOG_INFO("[JOIN] a guest's accept controller %p: state 0x%X, code %d (was %s0x%X, %d); busy [mp+8] %u, [mp+9] %u",
+                     reinterpret_cast<void*>(Ctrls[I]), Now[I].State, Now[I].Code, Was ? "" : "new, ",
+                     Was ? Was->State : 0, Was ? Was->Code : 0, Busy1, Busy2);
+        }
+    }
+    for (const AcceptSeen& S : g_acceptSeen) {
+        if (!S.Ctrl) continue;
+        bool Still = false;
+        for (int I = 0; I < Count; ++I) Still = Still || Ctrls[I] == S.Ctrl;
+        if (!Still) {
+            LOG_INFO("[JOIN] a guest's accept controller %p is gone (last state 0x%X, code %d); busy [mp+8] %u, [mp+9] %u",
+                     reinterpret_cast<void*>(S.Ctrl), S.State, S.Code, Busy1, Busy2);
+        }
+    }
+    for (int I = 0; I < 4; ++I) g_acceptSeen[I] = Now[I];
+}
+
 // The game throwing a guest out of the host's world by itself, as opposed to a
 // death (exe+0x2C9246, through the phantom branch) or leaving on purpose.
 constexpr uint32_t  kGameEjectCaller = 0x2C385C;
@@ -848,10 +959,36 @@ void NoteGameEject(int Reason) {
     ArmRejoin(false, true);
 }
 
+// The numbers behind a leave: the code the join controller keeps at +0x120 (written by
+// its event slot, a host's P2P packet 5, or state 6's own check: 0xF), the phantom type
+// at +0xD8 and the "mode" byte state 6 checks it against ([[GMImp+0xD0]+0x490]+0x1AD).
+struct LeaveNumbers {
+    int32_t Code;
+    int32_t Type;
+    int32_t Mode;
+};
+
+LeaveNumbers ReadLeaveNumbersSafe(void* Ctrl) {
+    LeaveNumbers N{ -1, -1, -1 };
+    __try {
+        const uintptr_t C = reinterpret_cast<uintptr_t>(Ctrl);
+        N.Code = *reinterpret_cast<const int32_t*>(C + 0x120);
+        N.Type = *reinterpret_cast<const uint8_t*>(C + 0xD8);
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+        const uintptr_t Player = Gm ? *reinterpret_cast<const uintptr_t*>(Gm + 0xD0) : 0;
+        const uintptr_t Param = Player ? *reinterpret_cast<const uintptr_t*>(Player + 0x490) : 0;
+        if (Param) N.Mode = *reinterpret_cast<const int8_t*>(Param + 0x1AD);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return N;
+}
+
 void __fastcall JoinLeaveDetour(void* Ctrl, int Reason) {
     const uintptr_t Caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
-    LOG_INFO("[DEATH] join controller asked to leave: reason %d, state %d (from exe+0x%llX)",
-             Reason, ReadJoinState(), static_cast<unsigned long long>(Caller - ExeBase()));
+    const LeaveNumbers N = ReadLeaveNumbersSafe(Ctrl);
+    LOG_INFO("[DEATH] join controller asked to leave: reason %d, state %d (from exe+0x%llX); code +0x120 = %d, "
+             "phantom type %d, mode %d", Reason, ReadJoinState(), static_cast<unsigned long long>(Caller - ExeBase()),
+             N.Code, N.Type, N.Mode);
     reinterpret_cast<LeaveFn>(g_joinLeaveOriginal)(Ctrl, Reason);
     if (Caller - ExeBase() == kGameEjectCaller) NoteGameEject(Reason);
 }
@@ -921,6 +1058,7 @@ void* __fastcall ResultSeqDetour(void* Result, void* Out, void* Arg3, const int*
     // fight; the boss being dead is exactly what that message says.
     uint8_t Copy[24];
     const uint8_t* Use = Row;
+    if (Code && *Code == kResultHostDied) g_hostDeathResultAt.store(GetTickCount64());
 
     // A won boss fight while this guest stays: "duty fulfilled" (row byte 3 = 1)
     // and the guest's own boss kill (code 0x12, whose row a guest has never been
@@ -1094,6 +1232,23 @@ bool PointCameraAt(uintptr_t Chr, const char* Why, bool Say) {
 // operator binds itself back to the local player whenever its own reference
 // resolves to nothing (exe+0x495B60), and whether a death does that is exactly
 // what is unknown -- so this re-asks once a second, quietly.
+// A far partner watched while this guest is down: let go as soon as that no longer holds.
+void TickFarSpectate(int Join, int32_t Hp) {
+    if (!FarSpectating()) return;
+    const char* Why = nullptr;
+    if (Hp != kNoHp && !IsDead(Hp))            Why = "up again";
+    else if (Join != kJoinInWorld)              Why = "out of the host's world";
+    else if (!PlayersShareMap())                Why = "the partner is in another map now";
+    else if (!GetPartnerCharacter(3000))        Why = "the partner's character is gone";
+    if (!Why) return;
+    StopFarSpectate(Why);
+    uintptr_t Gm = 0, Local = 0;
+    if (ReadPtr(ExeBase() + kGameManagerImp, &Gm) && ReadPtr(Gm + 0xD0, &Local) && Local) {
+        PointCameraAt(Local, Why, true);
+    }
+    g_cameraMoved = false;
+}
+
 void TickCameraHold(int32_t Hp) {
     if (!g_cameraMoved || Hp == kNoHp || !IsDead(Hp)) return;
     static ULONGLONG s_at = 0;
@@ -1142,7 +1297,14 @@ void TickLife(int32_t Hp) {
         if (Died) {
             const uintptr_t Partner = GetPartnerCharacter(5000);
             float Distance = -1.0f;
-            if (Partner && !PartnerCloseEnoughToWatch(&Distance)) {
+            const bool Close = Partner && PartnerCloseEnoughToWatch(&Distance);
+            if (Partner && !Close && Distance >= 0.0f && ReadJoinState() == kJoinInWorld &&
+                StartFarSpectate(Partner)) {
+                LOG_INFO("[CAM] the partner is %.0f m away -- while I am down the world is loaded around it, and the "
+                         "camera follows it", Distance);
+                g_cameraMoved = PointCameraAt(Partner, "this player is down, the partner far away", true);
+                if (!g_cameraMoved) StopFarSpectate("the camera could not be pointed at the partner");
+            } else if (Partner && !Close) {
                 if (Distance < 0.0f) {
                     LOG_INFO("[CAM] the camera stays with me: the partner is in another map or its position is not known");
                 } else {
@@ -1155,6 +1317,7 @@ void TickLife(int32_t Hp) {
                 LOG_INFO("[CAM] nobody to follow: the partner's character has not been seen in the last 5 s");
             }
         } else if (g_cameraMoved) {
+            StopFarSpectate("up again");
             uintptr_t Gm = 0, Local = 0;
             if (ReadPtr(ExeBase() + kGameManagerImp, &Gm) && ReadPtr(Gm + 0xD0, &Local) && Local) {
                 PointCameraAt(Local, "up again", true);
@@ -1674,11 +1837,31 @@ void TickBonfireSync(int Join) {
     ApplyPartnerBonfires();
 }
 
+// A guest's own copy of the fight it drove to its end is paying out right now: phase 2 or 3
+// of that battle, within twenty seconds of the end. The hold has to outlast it, or the way
+// home starts before exe+0x181950 and exe+0x181850 have handed out the souls and the reward
+// (boss_down.cpp lets those phases run while the guest is down).
+bool CopyStillPayingOut() {
+    const int32_t   Killed = g_guestKilled.load();
+    const ULONGLONG At     = g_guestKilledAt.load();
+    if (Killed <= 0 || !At || GetTickCount64() - At > kPayOutMs) return false;
+    int32_t Active = 0, Phase = 0;
+    if (!ReadBoss(&Active, &Phase) || Active != Killed || (Phase != 2 && Phase != 3)) return false;
+    static int32_t s_told = 0;
+    if (s_told != Killed) {
+        s_told = Killed;
+        LOG_INFO("[DEATH] held a little longer: my copy of battle %d is in phase %d and hands out the reward first",
+                 Killed, Phase);
+    }
+    return true;
+}
+
 void TickHold(int Join, int32_t Hp) {
     if (!g_hold.Active) return;
     const ULONGLONG Now = GetTickCount64();
     const char* Why = nullptr;
-    if (!BossFightOn(Join))                              Why = "the boss fight is over";
+    if (CopyStillPayingOut())                            Why = nullptr;
+    else if (!BossFightOn(Join))                         Why = "the boss fight is over";
     else if (g_hold.OwnDeath && !g_partnerAlive.load())  Why = "the partner fell too";
     else if (!g_hold.OwnDeath && IsDead(Hp))             Why = "I fell too";
     else if (Join != kJoinInWorld)                        Why = "the session ended";
@@ -1699,6 +1882,63 @@ void TickHold(int Join, int32_t Hp) {
     if (Current && Join == kJoinInWorld) CallPhantomBranch(Held.Result, Held.Reason);
 }
 
+// The host died where this guest's game cannot see it (0.2.2, second report point 1).
+//
+// A guest learns of the host's death from the host's character in its own copy of the
+// world: the result "host died" (code 4, posted at exe+0x19216E) comes when that character
+// dies here. In another map there is no such character -- it goes with the map it was
+// loaded in -- so nothing comes: on 17.09 at 16:28:25 the host fell in 10310000 with the
+// guest in Majula, the host's respawn waited for the session to end (WaitSessionJob
+// exe+0x191210, the host's camera frozen at its body), and only once the guest travelled
+// to 10310000 (16:28:54) did its game see the body, post the result (16:28:57) and send it
+// home (16:29:03). So with the host dead by its own PlayerDeath packet for kHostDeadUnseenMs,
+// no shared map, no partner character here and no result of the game's own, the guest
+// leaves the way that result makes it leave -- the join controller's leave with reason 3,
+// which exe+0x2C9220 passes on from the phantom branch -- and joins again once the host is up.
+bool CallJoinLeaveSafe(void* Ctrl, int Reason) {
+    __try {
+        reinterpret_cast<LeaveFn>(g_joinLeaveOriginal)(Ctrl, Reason);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+uintptr_t ReadJoinCtrl() {
+    uintptr_t Root = 0, Mp = 0, Ctrl = 0, Vtbl = 0;
+    if (!ReadPtr(ExeBase() + kNetRoot, &Root) || !ReadPtr(Root + 0x18, &Mp) || !ReadPtr(Mp + 0x40, &Ctrl)) return 0;
+    return ReadPtr(Ctrl, &Vtbl) && Vtbl == ExeBase() + kJoinCtrlVtable ? Ctrl : 0;
+}
+
+void TickHostDiedElsewhere(int Join, int32_t Hp) {
+    static ULONGLONG s_since = 0;
+    const ULONGLONG Now = GetTickCount64();
+    const ULONGLONG ResultAt = g_hostDeathResultAt.load();
+    const bool GameSawIt = ResultAt && Now - ResultAt < 30000;
+    const bool Unseen = g_enabled.load() && g_joinLeaveOriginal && Join == kJoinInWorld && IsAlive(Hp) &&
+                        !g_partnerAlive.load() && PartnerConnected() && !g_hold.Active && !g_rejoin.Pending &&
+                        !GameSawIt && !PlayersShareMap() && !GetPartnerCharacter(2000);
+    if (!Unseen) {
+        s_since = 0;
+        return;
+    }
+    if (!s_since) s_since = Now;
+    if (Now - s_since < kHostDeadUnseenMs) return;
+    s_since = 0;
+    const uintptr_t Ctrl = ReadJoinCtrl();
+    if (!Ctrl) return;
+    LOG_INFO("[DEATH] the host died in map %u while I stand in another -- my game cannot see it (no \"host died\" "
+             "result here), so I leave its world the way that result would (reason %d) and come back once it is up",
+             PartnerArea(), kLeaveHostDied);
+    Toast("The host fell elsewhere -- back to your world until it is up",
+          "Хост погиб в другой локации \xE2\x80\x94 возвращаюсь к себе, пока он не встанет", UI::NotifyKind::Warning);
+    ArmRejoin(false, false);
+    if (!CallJoinLeaveSafe(reinterpret_cast<void*>(Ctrl), kLeaveHostDied)) {
+        g_rejoin.Pending = false;
+        LOG_WARNING("[DEATH] leaving the host's world threw -- staying");
+    }
+}
+
 // The host travelled by bonfire (packet HostTravelled). The game's own answer is
 // to throw the guest out -- up to five minutes later: on 16.09 the host travelled
 // at 18:38:52, its game sent RequestNotifyLeaveGuestPlayer at 18:40:58, and the
@@ -1716,11 +1956,37 @@ void TickHostTravel(int Join) {
     LOG_INFO("[TRAVEL] the host travelled to bonfire %d (map %u)%s", Bonfire,
              RawMapToArea(g_hostTravelMap.load()),
              Join == kJoinInWorld ? " -- I stay where I am; travel there to join up again" : "");
-    if (Join == kJoinInWorld && g_enabled.load()) {
-        Toast("The host travelled -- travel to the same bonfire to join up again.",
-              "Хост переместился — переместись к тому же костру, чтобы снова быть вместе.",
-              UI::NotifyKind::Player);
+}
+
+// The partner's travel, told on the game thread: the bonfire's name is looked up here.
+struct PartnerTravel {
+    int32_t Map;
+    int32_t Target;
+    int32_t Type;
+    char    From[32];
+};
+std::mutex    g_partnerTravelMutex;
+PartnerTravel g_partnerTravel{};
+bool          g_partnerTravelNew = false;
+
+void TickPartnerTravel(int Join) {
+    PartnerTravel T{};
+    {
+        std::lock_guard<std::mutex> Lock(g_partnerTravelMutex);
+        if (!g_partnerTravelNew) return;
+        g_partnerTravelNew = false;
+        T = g_partnerTravel;
     }
+    const std::string Place = TravelPlaceName(T.Map, T.Target, T.Type);
+    const bool HostWent = Join == kJoinInWorld;   // only the host's travel reaches a guest in its world
+    LOG_INFO("[TRAVEL] %s travelled: %s (map %u, id %d, type %d)", T.From, Place.c_str(), RawMapToArea(T.Map),
+             T.Target, T.Type);
+    UI::Overlay::GetInstance().ShowNotification(
+        HostWent ? UI::Format(UI::Tr("%s travelled to %s \xE2\x80\x94 travel there too to stay together.",
+                                     "%s переместился: %s \xE2\x80\x94 переместись туда же, чтобы быть вместе."),
+                              T.From, Place.c_str())
+                 : UI::Format(UI::Tr("%s travelled to %s.", "%s переместился: %s."), T.From, Place.c_str()),
+        6.0f, UI::NotifyKind::Player);
 }
 
 void TickRejoin(int Join, int32_t Hp) {
@@ -1901,17 +2167,22 @@ void DeathSyncGameTick() {
     const int32_t Hp   = ReadLocalHp();
     TickLife(Hp);
     TickCameraHold(Hp);
+    TickFarSpectate(Join, Hp);
     TickBoss(Join);
     TickGuestBoss(Join);
     TickArrival(Join);
     TickTravelList(Join);
     TickBonfireSync(Join);
     TickHold(Join, Hp);
+    TickHostDiedElsewhere(Join, Hp);
+    AcceptProbeTick();
     TickHostTravel(Join);
+    TickPartnerTravel(Join);
     TickRejoin(Join, Hp);
     TickJoinFlight(Join);
     TravelResyncTick();
     PoseProbeTick();
+    GuestWorldTick();
 }
 
 void NotePartnerLife(bool Alive) {
@@ -1926,6 +2197,15 @@ void NoteHostTravelled(int32_t RawMap, int32_t Bonfire) {
     if (g_flightOpen.load()) g_hostTravelledInFlight.store(true);
     WatchPoses();
     LOG_INFO("[DEATH] the host says it travelled to bonfire %d (map %u)", Bonfire, RawMapToArea(RawMap));
+}
+
+void NotePartnerTravelled(int32_t Map, int32_t Target, int32_t Type, const std::string& From) {
+    std::lock_guard<std::mutex> Lock(g_partnerTravelMutex);
+    g_partnerTravel.Map = Map;
+    g_partnerTravel.Target = Target;
+    g_partnerTravel.Type = Type;
+    strncpy_s(g_partnerTravel.From, sizeof(g_partnerTravel.From), From.c_str(), _TRUNCATE);
+    g_partnerTravelNew = true;
 }
 
 void NotePartnerBonfires(const void* entries, uint32_t count) {
@@ -1971,6 +2251,15 @@ void SetBossSyncEnabled(bool On) {
 
 bool IsHostInBossFight() {
     return PartnerBossFight();
+}
+
+bool PartnerAliveReported() {
+    return g_partnerAlive.load();
+}
+
+// Game thread: a guest whose return is held for exactly this battle (boss_down.cpp).
+bool GuestHeldForBattle(int32_t Battle) {
+    return g_hold.Active && Battle > 0 && g_guestKilled.load() == Battle;
 }
 
 // The boss reward item for a guest (MpActiveHook asks): only while the fight

@@ -337,8 +337,12 @@ bool DoorStateIsNew(uintptr_t Door, uint8_t State) {
 }
 
 void NoteDoor(uintptr_t Door, uint8_t State) {
-    if (!DoorStateIsNew(Door, State)) return;
+    // A plain door (kind 0) standing open is nothing worth a line, and there are many of
+    // them: on 17.09 their lines crowded out the door slots and came back 7000 times a
+    // minute (40 816 of the guest's 41 271 travel lines, a 46 MB log).
     DoorInfo Info{};
+    if (State == 0 && ReadDoor(Door, &Info) && Info.Kind == 0) return;
+    if (!DoorStateIsNew(Door, State)) return;
     if (!ReadDoor(Door, &Info)) return;
     LOG_INFO("[TRAVEL] door %p: kind %u, stored role %d, session role %d, flag %u -> state %u (%s)",
              reinterpret_cast<void*>(Door), Info.Kind, Info.StoredRole, ReadSessionRole(),

@@ -24,6 +24,7 @@
 #include <intrin.h>
 #include <vector>
 #include <map>
+#include <set>
 #include <mutex>
 #include <climits>
 
@@ -50,6 +51,11 @@ using namespace DS2Coop::Addresses;
 // Armed with the END key, auto-disarms after 15 seconds so the log does not fill
 // with the network thread's own reads.
 // ============================================================================
+namespace DS2Coop::Sync {
+// Flag groups loaded after the join, handed over once both players share the map (below).
+void HandOverNewGroups(const std::map<uint32_t, std::vector<uint8_t>>& Current);
+}
+
 namespace {
 
 constexpr int kMaxWatchSites = 48;
@@ -427,6 +433,22 @@ std::atomic<uint32_t> g_npcSpawnCalls{ 0 };
 std::atomic<bool>     g_guestDropsLocal{ true };
 std::atomic<uint32_t> g_guestDropLots{ 0 };
 
+// A guest's own kills in the host's world (docs §3.47). When a generator record dies,
+// exe+0x40FDB0 counts the kill -- unless this predicate says "a world entered by a
+// multiplayer warp":
+//
+//   exe+0x40FE79  CALL exe+0x5135F0
+//   exe+0x40FE7E  TEST AL,AL
+//   exe+0x40FE80  JNZ  exe+0x40FED6   ; past the count
+//
+// so a guest never counted a kill, and after a rest a boss the guest had killed with the
+// host stood in its arena again for the guest alone (17.09, report of 17.09, point 5). The
+// count goes to the session's kill counters (store+0x1D0A8), never to the guest's own save.
+// Read from the disassembly only: the ini switch and the session counters' log line
+// (enemy_reconcile.cpp) are what show which way the branch really goes.
+std::atomic<bool>     g_guestKillCounts{ true };
+std::atomic<uint32_t> g_guestKillCountCalls{ 0 };
+
 static bool IsGuestInHostWorld();   // below, with the IsHost detour
 
 uint64_t __fastcall MpActiveHook(void* Session) {
@@ -436,6 +458,7 @@ uint64_t __fastcall MpActiveHook(void* Session) {
     static const uintptr_t kDropLotReturn   = kBase + 0x1E25E0;
     static const uintptr_t kBossItemReturn  = kBase + 0x18187C;   // exe+0x181850: the boss reward, owner only
     static const uintptr_t kBossLotReturn   = kBase + 0x1E2484;   // exe+0x1E2450: that reward's lot, owner only
+    static const uintptr_t kKillCountReturn = kBase + 0x40FE7E;   // exe+0x40FDB0: count this kill?
     const uintptr_t Caller = reinterpret_cast<uintptr_t>(_ReturnAddress());
     // The boss reward for a guest whose copy of the host's won fight is in phase 3
     // (death_sync.cpp drives it there): both owner checks on that path, and only
@@ -460,6 +483,14 @@ uint64_t __fastcall MpActiveHook(void* Session) {
         const uint32_t Count = g_npcSpawnCalls.fetch_add(1) + 1;
         if (Count == 1 || Count % 2000 == 0) {
             LOG_INFO("[NPC] this world is finishing its characters here as a guest (%u calls)", Count);
+        }
+        return 0;
+    }
+    if (g_guestKillCounts.load() && Caller == kKillCountReturn && IsGuestInHostWorld()) {
+        const uint32_t Count = g_guestKillCountCalls.fetch_add(1) + 1;
+        if (Count <= 5 || Count % 200 == 0) {
+            LOG_INFO("[ENEMIES] a generator record died here as a guest -- counted as the host counts it "
+                     "(exe+0x40FE7E, %u so far)", Count);
         }
         return 0;
     }
@@ -867,6 +898,7 @@ void FlagSyncTick() {
 
     auto Current = CaptureFlags();
     if (Current.empty()) return;
+    if (!Settling) DS2Coop::Sync::HandOverNewGroups(Current);
 
     std::lock_guard<std::mutex> Lock(g_flagSyncMutex);
 
@@ -2026,15 +2058,33 @@ std::atomic<bool>     g_placeSignPending{ false };
 //
 // Only for a guest whose sign a host is meant to summon. A host, a solo game
 // and sign_under_feet=false place as before.
-// Host: measure the origin of the map I am standing in by putting one sign down.
+// Host: measure the origin of the map I am standing in by putting one sign down --
+// the last resort, when the game's own origin cannot be used yet.
 //
-// A map's origin can only be measured by someone standing in it: it is my own
-// position minus what the game wrote into my own sign, over 32 (session_hooks.cpp).
-// The guest needs it to aim its sign at me, so in a map where I have never
-// placed one -- Majula above all -- the join would now wait for an origin that
-// nobody can supply. One sign of my own in my own world measures it, and it goes
-// to the guest from there. Nothing summons it: the automatic summon only takes
-// the sign the other player announced.
+// The guest needs the origin of my map to aim its sign at me from another map.
+// The game's own number comes first (session_hooks.cpp, LookupMapOrigin); only
+// while that is not verified, and only for a map with nothing stored, is one sign
+// of mine put down to measure it. Before 0.2.2 that sign went down in every new
+// map whether or not anyone was in the lobby, it was aimed at the other player
+// like a real one, and it was never taken down: after the eagle flight to 10160000
+// it simply stood under the host's feet (17.09 15:11:57, point 10). Now it goes
+// down only while the other player stands in another map, is aimed at nobody, is
+// not announced, and is taken down the moment the server has it.
+std::atomic<bool> g_probeSignPending{ false };
+ULONGLONG         g_probeTakeDownUntil = 0;   // game thread only: a probe sign to take down
+constexpr ULONGLONG kProbeTakeDownMs = 15000;
+
+static bool PartnerInAnotherMap(uint32_t Here, uint32_t* PartnerArea) {
+    *PartnerArea = 0;
+    const uint64_t LocalId = DS2Coop::Network::PeerManager::GetInstance().GetLocalPlayerId();
+    for (const auto& Player : DS2Coop::Session::SessionManager::GetInstance().GetPlayers()) {
+        if (Player.playerId == LocalId) continue;
+        *PartnerArea = Player.onlineAreaId;
+        return Player.onlineAreaId != 0 && Player.onlineAreaId != Here;
+    }
+    return false;   // nobody else in the lobby
+}
+
 static void ProbeOwnMapOrigin() {
     auto& Lobby = DS2Coop::Session::SessionManager::GetInstance();
     if (!Lobby.IsActive() || !Lobby.IsHost()) return;
@@ -2042,7 +2092,9 @@ static void ProbeOwnMapOrigin() {
     if (!Here) return;
     uint32_t Area = 0;
     float X = 0, Y = 0, Z = 0;
-    if (DS2Coop::Hooks::GetLocalMapOrigin(&Area, &X, &Y, &Z)) return;   // measured already
+    if (DS2Coop::Hooks::GetLocalMapOrigin(&Area, &X, &Y, &Z)) return;   // known already
+    uint32_t PartnerArea = 0;
+    if (!PartnerInAnotherMap(Here, &PartnerArea)) return;   // nobody needs it now
 
     // Game thread only (the sign-manager tick).
     static uint32_t  s_forMap = 0;
@@ -2057,9 +2109,32 @@ static void ProbeOwnMapOrigin() {
     if (s_tries >= 3 || Now < s_nextTry) return;
     ++s_tries;
     s_nextTry = Now + 30000;
-    g_placeSignPending.store(true);
-    LOG_INFO("[SIGN] map %u has no origin yet -- placing one sign of my own to measure it (try %d of 3)",
-             Here, s_tries);
+    g_probeSignPending.store(true);
+    LOG_INFO("[SIGN] map %u has no origin yet (the game's own origin %s) and the other player is in map %u -- "
+             "one sign of mine measures it and is taken down at once (try %d of 3)",
+             Here, DS2Coop::Hooks::IsGameOriginTrusted() ? "does not resolve here" : "is not verified yet",
+             PartnerArea, s_tries);
+}
+
+// A probe sign comes down as soon as the server has created it.
+static void TickProbeTakeDown(void* Manager) {
+    if (!g_probeTakeDownUntil || !Manager) return;
+    const ULONGLONG Now = GetTickCount64();
+    switch (DS2Coop::Sync::TakeDownPlacedSign(Manager)) {
+    case DS2Coop::Sync::PlacedSignTakeDown::NotCreatedYet:
+        if (Now < g_probeTakeDownUntil) return;
+        LOG_WARNING("[SIGN] the sign that measured the map got no id from the server in %llu s -- left to the game",
+                    kProbeTakeDownMs / 1000);
+        break;
+    case DS2Coop::Sync::PlacedSignTakeDown::NoSign:
+        if (Now < g_probeTakeDownUntil) return;   // the create has not reached the manager yet
+        LOG_INFO("[SIGN] the sign that measured the map is not there any more");
+        break;
+    case DS2Coop::Sync::PlacedSignTakeDown::TakenDown:
+    case DS2Coop::Sync::PlacedSignTakeDown::Failed:
+        break;
+    }
+    g_probeTakeDownUntil = 0;
 }
 
 static bool CanAimSignAtPartner(uint32_t* PartnerArea) {
@@ -2406,11 +2481,16 @@ bool SummonOfferedSign(void* SignManager, bool Quiet) {
         using StartSummonFn = void(__fastcall*)(void*, uint32_t*);
         auto StartSummon = reinterpret_cast<StartSummonFn>(ExeBase + 0x2A2CA0);
         uint32_t Pick = Live[Count - 1];
+        DS2Coop::Sync::SetPartnerSummonStarting(true);
         StartSummon(SignManager, &Pick);
+        DS2Coop::Sync::SetPartnerSummonStarting(false);
         LOG_INFO("[SUMMON] summon job started for 0x%08X — RequestSummonSign should follow",
                  Live[Count - 1]);
         return true;
     } __except(EXCEPTION_EXECUTE_HANDLER) {
+        // A throw inside StartSummon skips the reset above; left set, the effigy
+        // check would wave every later summon start through as the partner's.
+        DS2Coop::Sync::SetPartnerSummonStarting(false);
         LOG_ERROR("[SUMMON] threw — leaving it alone");
         return false;
     }
@@ -2434,6 +2514,29 @@ uint32_t  g_autoPendingId = 0;         // started; waiting for RequestSummonSign
 uint32_t  g_autoPendingRequests = 0;   // the summon-request count when it started
 ULONGLONG g_autoPendingSince = 0;
 ULONGLONG g_autoArmedAt = 0;
+ULONGLONG g_autoRefusedUntil = 0;       // the game refused to start a job: wait, then the same sign again
+ULONGLONG g_autoRefusedToastAt = 0;
+
+// The host's game would not even start the partner's summon. When the area's protection
+// against invaders is the reason, the host is told what to do about it.
+void NoteAutoSummonRefused(uint32_t Sign, ULONGLONG Now) {
+    int32_t Area = 0;
+    float Seconds = 0.0f;
+    const bool Protected = DS2Coop::Sync::ReadAreaProtection(&Area, &Seconds);
+    if (Now - g_autoRefusedToastAt < 30000) return;
+    g_autoRefusedToastAt = Now;
+    LOG_WARNING("[AUTO] the game started no summon for 0x%08X%s -- trying the same sign again every second", Sign,
+                Protected ? " (the area is protected against invaders)" : "");
+    if (!Protected) return;
+    const int Minutes = static_cast<int>(Seconds) / 60, Secs = static_cast<int>(Seconds) % 60;
+    DS2Coop::UI::Overlay::GetInstance().ShowNotification(
+        DS2Coop::UI::Format(DS2Coop::UI::Tr(
+            "This area is protected against invaders (effigy, %d:%02d left) and the game will not summon your partner. "
+            "Remove the protection at a bonfire.",
+            "Здесь защита от вторжений (фигурка, ещё %d:%02d), и игра не призывает напарника. Сними защиту у костра."),
+            Minutes, Secs),
+        8.0f, DS2Coop::UI::NotifyKind::Warning);
+}
 
 // Joiner side: an automatic placement has to end in a RequestCreateSign. In
 // Majula the game submits nothing at all (20:44: "returned cleanly", no
@@ -2467,8 +2570,27 @@ int ListKnownSigns(uint32_t* Out, int Max) {
     }
 }
 
-// Start a summon on the newest known sign that is not in Skip.
-bool SummonJoinerSign(void* SignManager, const uint32_t* Skip, int SkipCount, uint32_t* Started) {
+// Whether one of the sign manager's five pending summons (manager+0x64, 0x1C each)
+// holds this sign: exe+0x2A2CA0 fills one when it really starts a summon job.
+bool SummonJobPendingSafe(void* SignManager, uint32_t Id) {
+    __try {
+        const uintptr_t Base = reinterpret_cast<uintptr_t>(SignManager) + 0x64;
+        for (int Slot = 0; Slot < 5; ++Slot) {
+            for (int Off = 0; Off < 0x1C; Off += 4) {
+                if (*reinterpret_cast<const uint32_t*>(Base + Slot * 0x1C + Off) == Id) return true;
+            }
+        }
+        return false;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return true;   // unreadable: assume it went as usual
+    }
+}
+
+// Start a summon on the newest known sign that is not in Skip. *JobMade says whether
+// the game really started a job for it (it refuses by itself, e.g. while the area is
+// protected against invaders).
+bool SummonJoinerSign(void* SignManager, const uint32_t* Skip, int SkipCount, uint32_t* Started, bool* JobMade) {
+    *JobMade = false;
     if (!SignManager) return false;
     uint32_t Live[16];
     const int Count = ListKnownSigns(Live, 16);
@@ -2478,18 +2600,28 @@ bool SummonJoinerSign(void* SignManager, const uint32_t* Skip, int SkipCount, ui
             if (Skip[J] == Live[I]) { Skipped = true; break; }
         }
         if (Skipped) continue;
+        const bool WasPending = SummonJobPendingSafe(SignManager, Live[I]);
+        DS2Coop::Sync::SetPartnerSummonStarting(true);
         __try {
             const uintptr_t ExeBase = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
             using StartSummonFn = void(__fastcall*)(void*, uint32_t*);
             uint32_t Pick = Live[I];
             reinterpret_cast<StartSummonFn>(ExeBase + 0x2A2CA0)(SignManager, &Pick);
         } __except (EXCEPTION_EXECUTE_HANDLER) {
+            DS2Coop::Sync::SetPartnerSummonStarting(false);
             LOG_ERROR("[SUMMON] starting a summon threw -- left alone");
             return false;
         }
+        DS2Coop::Sync::SetPartnerSummonStarting(false);
         *Started = Live[I];
-        LOG_INFO("[SUMMON] summon job started for 0x%08X (%d sign(s) known, %d passed over)",
-                 Live[I], Count, SkipCount);
+        *JobMade = !WasPending && SummonJobPendingSafe(SignManager, Live[I]);
+        int32_t Area = 0;
+        float Seconds = 0.0f;
+        const bool Protected = DS2Coop::Sync::ReadAreaProtection(&Area, &Seconds);
+        LOG_INFO("[SUMMON] summon of 0x%08X: job %s (%d sign(s) known, %d passed over; area %d %s)", Live[I],
+                 *JobMade ? "started" : WasPending ? "already pending" : "NOT started by the game", Count, SkipCount,
+                 Area, Protected ? "protected against invaders" : "not protected");
+        if (WasPending) *JobMade = true;
         return true;
     }
     return false;
@@ -2594,6 +2726,7 @@ void __fastcall SignTickDetour(void* Manager, uint32_t Delta) {
                 if (DS2Coop::Hooks::GetSummonRequestCount() != g_autoPendingRequests) {
                     LOG_INFO("[AUTO] RequestSummonSign went out for 0x%08X -- summoning the other player",
                              g_autoPendingId);
+                    DS2Coop::Sync::NotePartnerSummonSent();
                     g_autoPendingId = 0;
                     g_autoSummonUntil.store(0);
                 } else if (Now - g_autoPendingSince > 3000) {
@@ -2602,7 +2735,7 @@ void __fastcall SignTickDetour(void* Manager, uint32_t Delta) {
                     if (g_autoTriedCount < 16) g_autoTried[g_autoTriedCount++] = g_autoPendingId;
                     g_autoPendingId = 0;
                 }
-            } else if (Now >= g_autoSummonNextTry) {
+            } else if (Now >= g_autoSummonNextTry && Now >= g_autoRefusedUntil) {
                 g_autoSummonNextTry = Now + 500;
                 uint32_t Skip[32];
                 int SkipCount = 0;
@@ -2613,7 +2746,12 @@ void __fastcall SignTickDetour(void* Manager, uint32_t Delta) {
                 for (int I = 0; I < g_autoTriedCount && SkipCount < 32; ++I) Skip[SkipCount++] = g_autoTried[I];
                 const uint32_t RequestsBefore = DS2Coop::Hooks::GetSummonRequestCount();
                 uint32_t Started = 0;
-                if (SummonJoinerSign(Manager, Skip, SkipCount, &Started)) {
+                bool JobMade = false;
+                if (SummonJoinerSign(Manager, Skip, SkipCount, &Started, &JobMade) && !JobMade) {
+                    // Refused here, not by the sign: the same sign again in a second, no list requests.
+                    g_autoRefusedUntil = Now + 1000;
+                    NoteAutoSummonRefused(Started, Now);
+                } else if (Started) {
                     g_autoPendingId = Started;
                     g_autoPendingRequests = RequestsBefore;
                     g_autoPendingSince = Now;
@@ -2653,6 +2791,7 @@ void __fastcall SignTickDetour(void* Manager, uint32_t Delta) {
     // measured against, and the other player needs it to aim a sign here.
     DS2Coop::Hooks::ShareLocalMapOrigin();
     ProbeOwnMapOrigin();
+    TickProbeTakeDown(Manager);
 
     if (Manager && g_lastSignPoll != ULLONG_MAX) {
         const ULONGLONG Now = GetTickCount64();
@@ -2669,6 +2808,7 @@ void __fastcall SignTickDetour(void* Manager, uint32_t Delta) {
     // once (12.09 23:52:29, sitting at the Majula bonfire), and the server took
     // the reject badly. It goes down the moment that is over.
     uint32_t PartnerArea = 0;
+    const bool WantSign = g_placeSignPending.load() || g_probeSignPending.load();
     if (Manager && g_placeSignPending.load() && !CanAimSignAtPartner(&PartnerArea)) {
         static ULONGLONG s_aimToldAt = 0;
         const ULONGLONG Now = GetTickCount64();
@@ -2681,15 +2821,19 @@ void __fastcall SignTickDetour(void* Manager, uint32_t Delta) {
                             "sign waits (an unaimed sign drops the summoned player off the map)", PartnerArea);
             }
         }
-    } else if (Manager && g_placeSignPending.load() && DS2Coop::Sync::IsSummonBusy()) {
+    } else if (Manager && WantSign && DS2Coop::Sync::IsSummonBusy()) {
         static ULONGLONG s_busyToldAt = 0;
         const ULONGLONG Now = GetTickCount64();
         if (Now - s_busyToldAt > 20000) {
             s_busyToldAt = Now;
             LOG_INFO("[PLACE] busy (bonfire, menu or event) -- the sign waits until that is over");
-            DS2Coop::Sync::WarnBusyForSign();   // elsewhere: this function has a __try
+            // Only for a sign the player is waiting for, not for one that measures the map.
+            if (g_placeSignPending.load()) DS2Coop::Sync::WarnBusyForSign();   // elsewhere: this function has a __try
         }
-    } else if (Manager && g_placeSignPending.exchange(false)) {
+    } else if (Manager && WantSign) {
+        // A real sign measures the map as well, so a probe waiting beside it is dropped.
+        const bool Probe = !g_placeSignPending.exchange(false);
+        g_probeSignPending.store(false);
         // Submit the sign directly instead of going through exe+0x2A1410.
         //
         // That function first passes the requested type through exe+0x29C9B0,
@@ -2713,8 +2857,9 @@ void __fastcall SignTickDetour(void* Manager, uint32_t Delta) {
         auto Submit = reinterpret_cast<SubmitSignFn>(ExeBase + 0x2A2780);
         uint8_t Type = 1;   // white soapstone, matching sign_type in the messages
 
-        LOG_INFO("[PLACE] calling exe+0x2A2780(manager=%p, type=%u)", Manager, Type);
-        const bool Watch = g_autoPlaceWatch.exchange(false);
+        LOG_INFO("[PLACE] calling exe+0x2A2780(manager=%p, type=%u)%s", Manager, Type,
+                 Probe ? " -- a sign that only measures the map" : "");
+        const bool Watch = !Probe && g_autoPlaceWatch.exchange(false);
         const uint32_t CreatesBefore = DS2Coop::Hooks::GetSignCreateCount();
         // A create that failed before (no spot, Majula) leaves the live-sign flag
         // up with no id; the game's own cleanup takes it down first, or the next
@@ -2724,17 +2869,23 @@ void __fastcall SignTickDetour(void* Manager, uint32_t Delta) {
         // Where the game finds no spot for a sign (a save loaded straight into
         // Majula), the spot where the player stands is used -- this call only.
         DS2Coop::Sync::SetModSignPlacement(true);
+        DS2Coop::Hooks::SetSignProbe(Probe);   // the message is built inside this call
         __try {
             Submit(Manager, &Type);
             LOG_INFO("[PLACE] returned cleanly");
         } __except(EXCEPTION_EXECUTE_HANDLER) {
             LOG_ERROR("[PLACE] threw — wrong entry point or wrong arguments");
         }
+        DS2Coop::Hooks::SetSignProbe(false);
         DS2Coop::Sync::SetModSignPlacement(false);
         if (Silenced) StubReturnsOne(0x2A1BF0, false);
+        // A real sign replaces the manager's live one, a probe included, so only a
+        // probe is taken down.
+        g_probeTakeDownUntil = Probe ? GetTickCount64() + kProbeTakeDownMs : 0;
         // Where signs are not allowed the game would turn the summon down on
-        // arrival; the mod's own sign is let through (summon_accept.cpp).
-        DS2Coop::Sync::ArmSummonAccept();
+        // arrival; the mod's own sign is let through (summon_accept.cpp). Not for
+        // a probe: nobody is meant to summon it.
+        if (!Probe) DS2Coop::Sync::ArmSummonAccept();
         // An automatic placement is checked a few seconds on: a RequestCreateSign
         // must have gone out, or it is tried again (see g_autoPlaceUntil).
         if (Watch) {
@@ -2921,6 +3072,39 @@ bool ApplyRemoteEventFlag(uint32_t Id, bool Value) {
 // just joined. The diff above only reports what changes while both are
 // connected, so without this the guest never learns about the bonfires, fog
 // gates and bosses the host cleared long before.
+// One group, in pieces of 640 bytes. Before 0.2.2 a group went out as one packet cut at
+// 640 bytes, and groups 10 and 20 are 1250: flags 105120-109999 and 205120-209999 -- NPC
+// talk progress among them -- never reached a joining guest.
+size_t SendFlagGroup(uint32_t Group, const std::vector<uint8_t>& Bits) {
+    size_t Set = 0;
+    DS2Coop::Network::FlagBulkPacket Packet{};
+    for (size_t Offset = 0; Offset < Bits.size(); Offset += sizeof(Packet.bits)) {
+        Packet = DS2Coop::Network::FlagBulkPacket{};
+        Packet.header.magic = 0x44533243;
+        Packet.header.type = DS2Coop::Network::PacketType::FlagBulk;
+        Packet.header.size = sizeof(Packet);
+        Packet.header.timestamp = GetTickCount64();
+        Packet.group = Group;
+        Packet.offset = static_cast<uint32_t>(Offset);
+        const size_t Left = Bits.size() - Offset;
+        Packet.bytes = static_cast<uint32_t>(Left < sizeof(Packet.bits) ? Left : sizeof(Packet.bits));
+        memcpy(Packet.bits, Bits.data() + Offset, Packet.bytes);
+        for (uint32_t I = 0; I < Packet.bytes; I++) {
+            for (int Bit = 0; Bit < 8; Bit++) {
+                if (Packet.bits[I] & (1 << Bit)) ++Set;
+            }
+        }
+        DS2Coop::Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
+    }
+    return Set;
+}
+
+// The groups a joined guest has been handed, so a group that turns up later -- a map the
+// host loads after the join -- is handed over once both stand in that map (0.2.2, second
+// report point 3: a boss killed long ago stood behind its fog again for the guest, whose
+// copy of that map's flags had never been told). Game thread only (the flag tick).
+std::set<uint32_t> g_groupsHandedOver;
+
 void SendFlagCatchUp() {
     if (static_cast<FlagSyncMode>(g_flagSyncMode.load()) != FlagSyncMode::On) return;
     auto Flags = CaptureFlags();
@@ -2930,32 +3114,41 @@ void SendFlagCatchUp() {
     }
     int Groups = 0;
     size_t Set = 0;
+    g_groupsHandedOver.clear();
     for (const auto& G : Flags) {
-        DS2Coop::Network::FlagBulkPacket Packet{};
-        Packet.header.magic = 0x44533243;
-        Packet.header.type = DS2Coop::Network::PacketType::FlagBulk;
-        Packet.header.size = sizeof(Packet);
-        Packet.header.timestamp = GetTickCount64();
-        Packet.group = G.first;
-        Packet.bytes = static_cast<uint32_t>(G.second.size() < sizeof(Packet.bits) ? G.second.size()
-                                                                                   : sizeof(Packet.bits));
-        memcpy(Packet.bits, G.second.data(), Packet.bytes);
-        for (uint32_t I = 0; I < Packet.bytes; I++) {
-            for (int Bit = 0; Bit < 8; Bit++) {
-                if (Packet.bits[I] & (1 << Bit)) ++Set;
-            }
-        }
-        DS2Coop::Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
+        Set += SendFlagGroup(G.first, G.second);
+        g_groupsHandedOver.insert(G.first);
         ++Groups;
     }
     LOG_INFO("[FLAGSYNC] handed over what is already done: %d group(s), %zu flag(s) set", Groups, Set);
+}
+
+// Host: a group loaded after the guest was handed everything, sent once both players share
+// the map it belongs to -- so the guest has that map loaded too and the flags are not
+// dropped as "a group this save does not have".
+void HandOverNewGroups(const std::map<uint32_t, std::vector<uint8_t>>& Current) {
+    if (static_cast<FlagSyncMode>(g_flagSyncMode.load()) != FlagSyncMode::On) return;
+    auto& Lobby = DS2Coop::Session::SessionManager::GetInstance();
+    if (!Lobby.IsActive() || !Lobby.IsHost() || g_groupsHandedOver.empty()) return;
+    if (DS2Coop::Network::PeerManager::GetInstance().GetPeers().empty()) {
+        g_groupsHandedOver.clear();
+        return;
+    }
+    if (!DS2Coop::Sync::PlayersShareMap()) return;
+    for (const auto& G : Current) {
+        if (g_groupsHandedOver.count(G.first)) continue;
+        const size_t Set = SendFlagGroup(G.first, G.second);
+        g_groupsHandedOver.insert(G.first);
+        LOG_INFO("[FLAGSYNC] group %u was loaded after the guest joined -- handed over now that we share a map "
+                 "(%zu flag(s) set)", G.first, Set);
+    }
 }
 
 bool IsProgressSharingOn() {
     return static_cast<FlagSyncMode>(g_flagSyncMode.load()) == FlagSyncMode::On;
 }
 
-void NoteRemoteFlagBulk(uint32_t group, const uint8_t* bits, uint32_t bytes) {
+void NoteRemoteFlagBulk(uint32_t group, const uint8_t* bits, uint32_t bytes, uint32_t offset) {
     if (!bits || !bytes) return;
     if (static_cast<FlagSyncMode>(g_flagSyncMode.load()) != FlagSyncMode::On) {
         LOG_DEBUG("[FLAGSYNC] ignoring a group of %u flags (flag_sync is not on)", bytes * 8);
@@ -2968,7 +3161,7 @@ void NoteRemoteFlagBulk(uint32_t group, const uint8_t* bits, uint32_t bytes) {
             if (!bits[I]) continue;
             for (int Bit = 0; Bit < 8; Bit++) {
                 if (!(bits[I] & (1 << Bit))) continue;
-                const uint32_t Id = group * 10000 + I * 8 + static_cast<uint32_t>(7 - Bit);
+                const uint32_t Id = group * 10000 + (offset + I) * 8 + static_cast<uint32_t>(7 - Bit);
                 AbsorbIntoBaseline(Id, true);
                 g_pendingRemoteFlags.emplace_back(Id, true);
                 ++Queued;
@@ -3281,15 +3474,29 @@ bool PlayerSync::Initialize() {
     DS2Coop::Sync::InstallPvpModes();
     DS2Coop::Sync::InstallEstusGrant();
     DS2Coop::Sync::InstallNpcProgress(SeamlessCoopMod::GetInstance().GetConfig().npc_progress);
+    DS2Coop::Sync::InstallBonfireLit();
     DS2Coop::Sync::SetDamageMode(SeamlessCoopMod::GetInstance().GetDamageModeSetting());
     // A guest's world: NPC talk, NPCs run here, characters after the host's world
     // has arrived (guest_world.cpp); travelling in a session (travel_sync.cpp);
     // covenant and summon gates for a host with a guest (mp_gates.cpp).
     {
         const auto& Cfg = SeamlessCoopMod::GetInstance().GetConfig();
-        DS2Coop::Sync::InstallGuestWorld(Cfg.guest_npc_talk_scripts, Cfg.guest_npc_local, Cfg.guest_wait_for_snapshot);
-        DS2Coop::Sync::InstallTravelSync(Cfg.travel_resync);
+        DS2Coop::Sync::InstallGuestWorld(Cfg.guest_npc_talk_scripts, Cfg.guest_npc_local, Cfg.guest_wait_for_snapshot,
+                                         Cfg.enemy_states_at_join);
+        DS2Coop::Sync::InstallTravelSync(Cfg.travel_resync, Cfg.enemy_detach_when_apart);
+        DS2Coop::Sync::InstallDeathResultType(Cfg.guest_result_type_fix);
+        DS2Coop::Sync::InstallEnemyReconcile(Cfg.enemy_dead_reconcile, Cfg.kill_counts_reconcile);
+        DS2Coop::Sync::InstallBossDown(Cfg.boss_while_down);
+        DS2Coop::Sync::SetJoinSlotConfirm(Cfg.join_slot_confirm);
+        DS2Coop::Sync::SetGuestEventScriptsOwner(Cfg.guest_event_scripts_owner);
+        DS2Coop::Sync::SetGuestNpcHitsIgnored(Cfg.guest_npc_hits_ignored);
+        DS2Coop::Sync::SetChestLidsReconcile(Cfg.chest_lids_reconcile);
+        DS2Coop::Sync::InstallBossArena(Cfg.boss_guest_starts);
+        DS2Coop::Sync::InstallFarDeathCamera(Cfg.far_death_camera);
+        DS2Coop::Sync::SetGuestKillCounts(Cfg.guest_kill_counts);
         DS2Coop::Sync::InstallMpGates(Cfg.mp_gates);
+        DS2Coop::Sync::SetEffigySummon(Cfg.effigy_summon);
+        DS2Coop::Sync::SetTransferEventsSolo(Cfg.transfer_events_solo);
         DS2Coop::Sync::InstallGuestDrops(true);
     }
 
@@ -3490,6 +3697,10 @@ static bool ReadPlayerPosition(float& x, float& y, float& z, float& rotY) {
 
 namespace DS2Coop::Sync {
 
+void SetGuestKillCounts(bool On) {
+    g_guestKillCounts.store(On);
+}
+
 // The local player's world position, for code outside this file.
 //
 // Used when dumping a sign creation: the message carries no coordinates, so the
@@ -3503,13 +3714,17 @@ void RequestImmediateSignPoll() {
 // the same pending flag as F11, so the placement itself happens inside the
 // sign-manager tick on the game's thread, and it is aimed under the host's feet
 // by the usual rewrite on the way out.
-void RequestAutoSignPlacement() {
-    if (!g_autoSummonEnabled.load()) return;
-    if (DS2Coop::Session::SessionManager::GetInstance().IsHost()) return;
-    static std::atomic<ULONGLONG> Last{ 0 };
+std::atomic<ULONGLONG> g_autoPlaceLast{ 0 };
+
+bool RequestAutoSignPlacement() {
+    if (!g_autoSummonEnabled.load()) return false;
+    if (DS2Coop::Session::SessionManager::GetInstance().IsHost()) return false;
     const ULONGLONG Now = GetTickCount64();
-    if (Now - Last.load() < 30000) return;    // one sign per handshake, not a flood
-    Last.store(Now);
+    if (Now - g_autoPlaceLast.load() < 30000) {   // one sign per handshake, not a flood
+        LOG_INFO("[AUTO] joined again within 30 s of the last sign -- no new sign");
+        return false;
+    }
+    g_autoPlaceLast.store(Now);
     // Checked a few seconds on, and tried again for two minutes if the game
     // submitted nothing (Majula takes no signs).
     g_autoPlaceUntil.store(Now + 120000);
@@ -3517,6 +3732,12 @@ void RequestAutoSignPlacement() {
     g_autoPlaceWatch.store(true);
     g_placeSignPending.store(true);
     LOG_INFO("[AUTO] joined the host -- putting a sign down for it to summon");
+    return true;
+}
+
+// Leaving the lobby ends the one-sign-per-handshake wait: the next join places a sign.
+void ForgetAutoSignPlacement() {
+    g_autoPlaceLast.store(0);
 }
 
 // Joiner, back home after a death (or after the host's): put a sign down again
@@ -4365,7 +4586,12 @@ void PlayerSync::EnableSummoning() {
                                          " id=0x%X%s(type=%u off=%u)", id,
                                          slotId == id ? "" : "!", type, disabled);
                     }
-                    LOG_INFO("[ACTIONS] %s", line);
+                    // Only when the list changes: once a second it was 6500-8800 lines a session.
+                    static char s_lastActions[512] = {};
+                    if (strcmp(s_lastActions, line) != 0) {
+                        strncpy_s(s_lastActions, sizeof(s_lastActions), line, _TRUNCATE);
+                        LOG_INFO("[ACTIONS] %s", line);
+                    }
                 }
             }
 
@@ -4438,8 +4664,27 @@ void PlayerSync::EnableSummoning() {
             }
             s_joinLogged = JoinSettling ? JoinState : -2;
 
+            // Nor during a load, or in the first 2 s after one. The death result a map
+            // load builds reads the phantom id once (exe+0x191BB0 -> exe+0x18F3A0, kept
+            // at +0xE0) and picks the death branch by it: 0 is the host's, which waits
+            // for as long as any session exists. A guest's own travel keeps join state 7,
+            // so the zeroing below could land between the game setting the id and that
+            // read -- on 17.09 at 14:44:02 it did ("zeroed (was 1)" in the second of the
+            // arrival), and the guest's next death at 14:45:49 left it watching the
+            // partner's camera until it left the lobby (0.2.2 point 3).
+            static ULONGLONG s_standingSince = 0;
+            {
+                int32_t GameState = 0;
+                uint8_t WarpFlags = 0;
+                const bool StandingNow = Memory::Read<int32_t>(gmImp + 0x24AC, &GameState) && GameState == 0x1E &&
+                                         Memory::Read<uint8_t>(gmImp + 0x24B1, &WarpFlags) && !(WarpFlags & 0x02);
+                if (!StandingNow) s_standingSince = 0;
+                else if (!s_standingSince) s_standingSince = nowTick;
+            }
+            const bool LoadSettled = s_standingSince && nowTick - s_standingSince >= 2000;
+
             uintptr_t ptr_b0 = 0;
-            if (!JoinSettling && Memory::Read<uintptr_t>(ptr_d0 + 0xB0, &ptr_b0) && ptr_b0) {
+            if (!JoinSettling && LoadSettled && Memory::Read<uintptr_t>(ptr_d0 + 0xB0, &ptr_b0) && ptr_b0) {
                 uint8_t phantomId = 0;
                 if (Memory::Read<uint8_t>(ptr_b0 + 0x3C, &phantomId) && phantomId != 0) {
                     Memory::Write<uint8_t>(ptr_b0 + 0x3C, (uint8_t)0);
@@ -4461,7 +4706,12 @@ void PlayerSync::EnableSummoning() {
                 // summoned guest is the real marker the game tests before it
                 // allows bonfires, chests and pickups.
                 // ==============================================================
-                if (diag) {
+                // Once per join state rather than every ten seconds: the identity hunt this served is
+                // long over (docs §3.24), and its eight lines were 5600-7900 lines a session.
+                static int s_identJoin = -100;
+                const bool IdentDue = diag && s_identJoin != JoinState;
+                if (IdentDue) s_identJoin = JoinState;
+                if (IdentDue) {
                     // Comparing two different players is too noisy — position,
                     // stamina and timers differ constantly. What actually
                     // identifies the marker is watching ONE client across the

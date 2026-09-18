@@ -182,6 +182,7 @@ void SessionManager::LeaveSession() {
     }
 
     TransitionToState(SessionState::Disconnected);
+    Sync::ForgetAutoSignPlacement();
 
     LOG_INFO("Left session");
 }

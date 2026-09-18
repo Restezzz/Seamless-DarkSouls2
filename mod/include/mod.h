@@ -7,7 +7,7 @@
 namespace DS2Coop {
 
 // Version information
-constexpr const char* MOD_VERSION = "0.2.1";  // keep in step with VERSION and CMakeLists.txt
+constexpr const char* MOD_VERSION = "0.2.2";  // keep in step with VERSION and CMakeLists.txt
 constexpr const char* MOD_NAME = "Dark Souls 2 Seamless Co-op";
 
 // Game version support
@@ -92,6 +92,45 @@ struct ModConfig {
     bool guest_npc_talk_scripts = true;
     bool guest_npc_local = true;
     bool guest_wait_for_snapshot = true;
+    // Enemies for a guest (0.2.2, docs §3.45): the host's enemy states from the join
+    // snapshot applied even though the join map's characters wait for it (killed
+    // enemies stay dead); the shared enemy table let go while the players stand in
+    // different maps (enemies there are not left frozen); a guest's death in the host's
+    // world never handled as the host's (no endless wait watching the partner). All on.
+    bool enemy_states_at_join = true;
+    bool enemy_detach_when_apart = true;
+    bool guest_result_type_fix = true;
+    // Enemies as the host has them in every map a guest loads, not only the join map
+    // (enemy_reconcile.cpp, docs §3.47): the host's killed enemies, and its kill counters,
+    // which keep a boss killed long ago out of its arena. A guest's own kills counted in
+    // the session's counters as the host counts them. All on.
+    bool enemy_dead_reconcile = true;
+    bool kill_counts_reconcile = true;
+    bool guest_kill_counts = true;
+    // A boss fight that ends while one of the players is down (boss_down.cpp, docs §3.47):
+    // the host's event scripts keep running, and the fight's last phases hand out the souls
+    // and the reward to a player who was down when the boss died. On.
+    bool boss_while_down = true;
+    // A guest thrown out right on arrival because the host's summon slot was dropped (a summon
+    // where the area says no, the host crossing a border meanwhile): reserved again and let
+    // through (summon_accept.cpp, docs §3.47). false: logged only.
+    bool join_slot_confirm = true;
+    // Map event scripts asking "someone else's multiplayer world?" answered "no" for a guest, as
+    // for the world's owner -- up to 0.2.1 that sent the Belfry lift down the owner's branch on the
+    // guest (guest_world.cpp, docs §3.47). Talk scripts are not affected. Off.
+    bool guest_event_scripts_owner = false;
+    // A guest's hits on NPCs of the host's world are not counted towards their anger: an NPC hit
+    // a few times still talks to the guest (npc_progress.cpp, docs §3.47). On.
+    bool guest_npc_hits_ignored = true;
+    // Chests the host has open are opened for a guest in every map it loads -- old chests the host
+    // opened long ago could not be opened by the guest at all (chest_lids.cpp, docs §3.47). On.
+    bool chest_lids_reconcile = true;
+    // A guest who walks into a boss's arena first wakes the boss on the host, as the host would
+    // (boss_arena.cpp, docs §3.47). On.
+    bool boss_guest_starts = true;
+    // A guest who dies far from its partner (same map): the world is loaded around the partner and
+    // the camera follows it, instead of staying at the body (death_camera.cpp, docs §3.47). On.
+    bool far_death_camera = true;
     // Travelling in a session (docs §3.38): after either player travels, the
     // partner's character and the shared enemies are put back once both stand in
     // the same map. On by default.
@@ -103,6 +142,12 @@ struct ModConfig {
     // is kept instead of being dropped by the game, and an item an NPC's talk gives
     // reaches the partner too if the partner has none of it. On by default.
     bool npc_progress = true;
+    // The area's protection against invaders (a burnt Human Effigy) keeps invaders out
+    // but lets the lobby partner be summoned (docs §3.45). On by default.
+    bool effigy_summon = true;
+    // Cutscene transfers the game hides in multiplayer (the eagle at the Pursuer's nest,
+    // the ship at No-man's Wharf, portals, DLC entrances) are offered in co-op.
+    bool transfer_events_solo = true;
     // Damage between the players when this player hosts: "off" (none), "ff"
     // (friendly fire, no lock-on on each other) or "pvp" (the guest counts as an
     // evil spirit: it can be locked on and hit, the enemies leave it alone).

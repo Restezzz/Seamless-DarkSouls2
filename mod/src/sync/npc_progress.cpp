@@ -56,8 +56,39 @@ constexpr uint32_t  kFlagSet         = 0x474A60;   // (flags, id, value): the se
 constexpr uint32_t  kFlagSetRaw      = 0x4750B0;   // (flags, id, value) -> AL: the bit changed
 constexpr uint32_t  kFlagGet         = 0x474230;   // (flags, id) -> AL
 constexpr uint32_t  kFlagGuestMay    = 0x25CDB0;   // (id) -> AL: a guest's write is let through
-constexpr uint32_t  kTalkFlagReturn  = 0x46216E;   // the script's flag command
+constexpr uint32_t  kTalkFlagReturn  = 0x46216E;   // the event script executor's flag command
+// The character script executor's flag command -- what an NPC's talk script runs
+// (exe+0x457C90: argument through vt[0x20], flags [[GMImp+0x70]+0x20], CALL exe+0x474A60 at
+// exe+0x457E7E). 0.2.1 only knew the event executor's, and on 17.09 not one talk write was
+// kept all session: the Fire Keeper repeated her first lines and a ring was given again and
+// again (second report, checklist items 5 and 7).
+constexpr uint32_t  kChrTalkFlagReturn = 0x457E83;
+// A locked door opened with its key (17.09, second report point 12: a guest with the key
+// could not open a door in the host's world). The door component exe+0x1CCDC0 checks the
+// key in the acting player's own inventory (exe+0x1ABEE0 / exe+0x1ABF10), shows the unlock
+// message and records the unlock with exe+0x474A60(flags, [door+0x98], 1) -- the call at
+// exe+0x1CD0EA -- which drops a guest's write in the host's world. The door's event opens
+// on that flag, so for a guest it stayed shut. Written here with the raw setter and sent on
+// with the game's own flag packet (exe+0x513230 -> exe+0x51E6B0), the way the setter does it
+// for a host, so the host's door opens as well.
+constexpr uint32_t  kDoorUnlockReturn = 0x1CD0EF;
+constexpr uint32_t  kFlagSession      = 0x513230;   // () -> the session the flag packet goes through, or 0
+constexpr uint32_t  kFlagPacket       = 0x51E6B0;   // (session, id, value)
 constexpr uint32_t  kGiveWrap        = 0x1AC3D0;   // (inventory, items, count) -> AL: jumps into ItemGive
+// An NPC a guest hit a few times would not talk to it any more (17.09, second report point 5),
+// though the guest's hits do it no damage. exe+0x416D60(genMgr, attacker, victim, hit), called
+// when a hit lands, counts hits on the victim's generator entity (+0x74 anyone's, +0x75 the local
+// player's, once per short window); the talk scripts read that count (f130311, id 0x1FD07, always
+// the local player's): one or two hits give a "why?" line, three run the hostility subroutine
+// 0x7FFFFFFB, which sets the NPC's hostile flag (103520-103890), a second one and 103999 and then
+// waits until it reads them back as set. A guest's flag writes in the host's world are dropped
+// (exe+0x474A60), so the script waited forever, with no talk until the map loaded again. A guest's
+// own hits on the host's world's characters are not counted at all (ini guest_npc_hits_ignored);
+// the hit, its sound and its flinch stay. The hostility flags are never kept from a guest either.
+constexpr uint32_t  kNpcHitCount     = 0x416D60;   // (genMgr, attacker, victim, hit)
+constexpr uint32_t  kAttackerChr     = 0x132140;   // (attacker) -> its character
+constexpr uint32_t  kHostileFlagLow  = 103500;     // the NPCs' hostility flags, 103520-103890 and 103999
+constexpr uint32_t  kHostileFlagHigh = 103999;
 constexpr uint32_t  kGiveItemReturn  = 0x198B33;   // command 0x1FDBB, one item
 constexpr uint32_t  kGiveLotReturnA  = 0x199DA3;   // command 0x2014A, an item lot
 constexpr uint32_t  kGiveLotReturnB  = 0x19A4D6;   // command 0x2014A, an item lot, the other path
@@ -75,6 +106,8 @@ using GuestMayFn = bool(__fastcall*)(uint32_t id);
 using GiveWrapFn = bool(__fastcall*)(void* inventory, Network::NpcGiftItem* items, int32_t count, int64_t mode);
 using CountFn    = int32_t(__fastcall*)(void* bag, int32_t id, uint8_t* flags);
 using ItemGiveFn = bool(__fastcall*)(void* bag, Network::NpcGiftItem* items, int32_t count, int32_t mode);
+using FlagSessionFn = uintptr_t(__fastcall*)();
+using FlagPacketFn  = void(__fastcall*)(uintptr_t session, uint32_t id, char value);
 
 FlagSetFn  g_flagSetOriginal  = nullptr;
 GiveWrapFn g_giveWrapOriginal = nullptr;
@@ -106,11 +139,10 @@ bool ReadPtr(uintptr_t Addr, uintptr_t* Out) {
     }
 }
 
-// A talk is open: the NPC handle the talk command wrote into EventTalkManager.
+// A talk is open (npc_talk.cpp: the handle EventTalkManager keeps, read as the int32 it is,
+// naming a character close by). Its eight-byte read was true all session on 17.09.
 bool TalkOpen() {
-    uintptr_t Gm = 0, Events = 0, Talk = 0, Handle = 0;
-    return ReadPtr(ExeBase() + kGameManagerImp, &Gm) && ReadPtr(Gm + 0x70, &Events) && ReadPtr(Events + 0x48, &Talk) &&
-           ReadPtr(Talk + 0x40, &Handle);
+    return IsTalkOpenNearby();
 }
 
 bool GuestInHostWorld() {
@@ -155,15 +187,84 @@ bool WriteFlagRawSafe(void* Flags, uint32_t Id, char Value, bool* Threw) {
     }
 }
 
+bool SendFlagPacketSafe(uint32_t Id, char Value) {
+    __try {
+        const uintptr_t Session = reinterpret_cast<FlagSessionFn>(ExeBase() + kFlagSession)();
+        if (!Session) return false;
+        reinterpret_cast<FlagPacketFn>(ExeBase() + kFlagPacket)(Session, Id, Value);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void DoorUnlock(void* Flags, uint32_t Id, char Value) {
+    const int Before = ReadFlagSafe(Flags, Id);
+    bool Threw = false;
+    const bool Changed = WriteFlagRawSafe(Flags, Id, Value, &Threw);
+    const bool Sent = !Threw && Changed && SendFlagPacketSafe(Id, Value);   // as the setter does: only a change
+    LOG_INFO("[TALK] a door opened with its key: flag %u = %d, a guest's write the game drops -- written here: %s "
+             "(was %d, now %d), sent to the host: %s", Id, Value ? 1 : 0,
+             Threw ? "threw" : Changed ? "changed" : "no change", Before, ReadFlagSafe(Flags, Id), Sent ? "yes" : "no");
+}
+
+using NpcHitFn      = void(__fastcall*)(void*, void*, void*, const void*);
+using AttackerChrFn = uintptr_t(__fastcall*)(void*);
+NpcHitFn              g_npcHitOriginal = nullptr;
+std::atomic<bool>     g_npcHitsIgnored{ true };   // ini guest_npc_hits_ignored
+std::atomic<uint32_t> g_npcHitsSkipped{ 0 };
+
+// The local player hit a character a generator made ([victim+0x110] low byte < 0x2A).
+bool LocalHitOnGeneratorChrSafe(void* Attacker, void* Victim) {
+    __try {
+        if (!Attacker || !Victim) return false;
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+        const uintptr_t Local = Gm ? *reinterpret_cast<const uintptr_t*>(Gm + 0xD0) : 0;
+        if (!Local) return false;
+        if (reinterpret_cast<AttackerChrFn>(ExeBase() + kAttackerChr)(Attacker) != Local) return false;
+        return (*reinterpret_cast<const uint32_t*>(reinterpret_cast<uintptr_t>(Victim) + 0x110) & 0xFF) < 0x2A;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void __fastcall NpcHitDetour(void* GenMgr, void* Attacker, void* Victim, const void* Hit) {
+    if (g_npcHitsIgnored.load(std::memory_order_relaxed) && LocalHitOnGeneratorChrSafe(Attacker, Victim) &&
+        GuestInHostWorld()) {
+        const uint32_t N = g_npcHitsSkipped.fetch_add(1) + 1;
+        if (N <= 5 || N % 100 == 0) {
+            LOG_INFO("[TALK] my hit on a character of the host's world is not counted towards its anger -- its "
+                     "talk stays open (%u so far)", N);
+        }
+        return;
+    }
+    g_npcHitOriginal(GenMgr, Attacker, Victim, Hit);
+}
+
 void __fastcall FlagSetDetour(void* Flags, uint32_t Id, char Value) {
     const uintptr_t Ret = reinterpret_cast<uintptr_t>(_ReturnAddress()) - ExeBase();
-    if (Ret != kTalkFlagReturn || !g_enabled.load(std::memory_order_relaxed) || !Flags || !TalkOpen() ||
-        !GuestInHostWorld()) {
+    if (Ret == kDoorUnlockReturn && Flags && GuestInHostWorld()) {
+        bool Ok = false;
+        if (!GuestMaySafe(Id, &Ok) && Ok) {
+            DoorUnlock(Flags, Id, Value);
+            return;
+        }
+        g_flagSetOriginal(Flags, Id, Value);
+        return;
+    }
+    if ((Ret != kTalkFlagReturn && Ret != kChrTalkFlagReturn) || !g_enabled.load(std::memory_order_relaxed) ||
+        !Flags || !TalkOpen() || !GuestInHostWorld()) {
         g_flagSetOriginal(Flags, Id, Value);
         return;
     }
     bool Ok = false;
     if (GuestMaySafe(Id, &Ok) || !Ok) {   // the game lets this one through itself
+        g_flagSetOriginal(Flags, Id, Value);
+        return;
+    }
+    if (Id >= kHostileFlagLow && Id <= kHostileFlagHigh) {
+        LOG_INFO("[TALK] a talk script set flag %u = %d -- an NPC's hostility, never kept from a guest: left to "
+                 "the game, which drops it", Id, Value ? 1 : 0);
         g_flagSetOriginal(Flags, Id, Value);
         return;
     }
@@ -210,9 +311,35 @@ bool CopyGiftSafe(const Network::NpcGiftItem* Items, int32_t Count, Network::Npc
     }
 }
 
+// Probe (17.09, second report point 8: the host got the Bell Keeper's ring from its NPC,
+// no NpcGift went out, and the guest never got one): every give through this wrapper in a
+// lobby, with where it came from and what the gift test saw, for the first 60.
+bool FirstItemSafe(const Network::NpcGiftItem* Items, int32_t* Id, int32_t* Num) {
+    __try {
+        *Id = Items->id;
+        *Num = Items->count;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 bool __fastcall GiveWrapDetour(void* Inventory, Network::NpcGiftItem* Items, int32_t Count, int64_t Mode) {
     const uintptr_t Ret = reinterpret_cast<uintptr_t>(_ReturnAddress()) - ExeBase();
     const bool Given = g_giveWrapOriginal(Inventory, Items, Count, Mode);
+    if (Items && Session::SessionManager::GetInstance().IsActive()) {
+        static std::atomic<uint32_t> s_lines{ 0 };
+        if (s_lines.fetch_add(1) < 60) {
+            int32_t Id = 0, Num = 0;
+            FirstItemSafe(Items, &Id, &Num);
+            uintptr_t Own = 0, Bag = 0;
+            bool InGame = false;
+            LocalInventorySafe(&Own, &Bag, &InGame);
+            LOG_INFO("[TALK] probe: item give from exe+0x%llX: %d item(s), first %d x%d, given %s, talk open %s, my "
+                     "own inventory %s", static_cast<unsigned long long>(Ret), Count, Id, Num, Given ? "yes" : "no",
+                     TalkOpen() ? "yes" : "no", Own == reinterpret_cast<uintptr_t>(Inventory) ? "yes" : "no");
+        }
+    }
     if (!Given || !Items || (Ret != kGiveItemReturn && Ret != kGiveLotReturnA && Ret != kGiveLotReturnB)) return Given;
     if (!g_enabled.load(std::memory_order_relaxed) || !Session::SessionManager::GetInstance().IsActive() || !TalkOpen()) {
         return Given;
@@ -299,11 +426,20 @@ bool InstallNpcProgress(bool Enabled) {
             g_giveWrapOriginal = nullptr;
             LOG_WARNING("[TALK] could not hook the talk give exe+0x%X", kGiveWrap);
         }
+        if (!Hooks.InstallHook(reinterpret_cast<void*>(ExeBase() + kNpcHitCount),
+                               reinterpret_cast<void*>(&NpcHitDetour), reinterpret_cast<void**>(&g_npcHitOriginal))) {
+            g_npcHitOriginal = nullptr;
+            LOG_WARNING("[TALK] could not hook the NPCs' hit count exe+0x%X", kNpcHitCount);
+        }
     }
     LOG_INFO("[TALK] NPC progress for both players %s", Enabled
         ? "ON: a guest's talk progress is kept, and what an NPC gives goes to the partner too if it has none"
         : "off (npc_progress=false)");
     return g_flagSetOriginal && g_giveWrapOriginal;
+}
+
+void SetGuestNpcHitsIgnored(bool On) {
+    g_npcHitsIgnored.store(On);
 }
 
 void NotePartnerNpcGift(const void* Items, uint32_t Count, const std::string& From) {

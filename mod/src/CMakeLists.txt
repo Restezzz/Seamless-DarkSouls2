@@ -19,9 +19,17 @@ add_library(ds2_seamless_coop SHARED
     sync/pvp_modes.cpp
     sync/estus_grant.cpp
     sync/npc_progress.cpp
+    sync/game_text.cpp
+    sync/bonfire_lit.cpp
     sync/join_direct.cpp
     sync/chr_death.cpp
     sync/guest_world.cpp
+    sync/death_result_type.cpp
+    sync/enemy_reconcile.cpp
+    sync/boss_down.cpp
+    sync/chest_lids.cpp
+    sync/boss_arena.cpp
+    sync/death_camera.cpp
     sync/travel_sync.cpp
     sync/mp_gates.cpp
     sync/guest_drops.cpp

@@ -144,6 +144,27 @@ uintptr_t LocalPlayer() {
     return Player;
 }
 
+// Whether a character is another player of this session: one of the five network
+// player slots of the player list [netRoot+0x20] (slot i at +0x1A8 + i*0xD0; exe+0x51D4B0
+// walks them by peer id) holds it as its character at slot +0x40. A player-shaped NPC
+// -- a red phantom, a summonable NPC phantom -- is in none of them, although it carries
+// the player class and -1 at chr+0x110 just like the partner (17.09: red phantoms were
+// drawn solid for the guest too, point 11 of the second report).
+bool IsSessionPlayerCharacter(uintptr_t Chr) {
+    if (!Chr) return false;
+    __try {
+        const uintptr_t Root = *reinterpret_cast<const uintptr_t*>(ExeBase() + kNetRoot);
+        const uintptr_t List = Root ? *reinterpret_cast<const uintptr_t*>(Root + 0x20) : 0;
+        if (!List) return false;
+        for (int I = 0; I < 5; ++I) {
+            if (*reinterpret_cast<const uintptr_t*>(List + 0x1E8 + static_cast<uintptr_t>(I) * 0xD0) == Chr) return true;
+        }
+        return false;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 // In the host's world: the join controller ([[netRoot+0x18]+0x40]) is in state 7.
 bool IsGuestInHostWorld() {
     uintptr_t Root = 0, Mp = 0, Ctrl = 0, Vtbl = 0;
@@ -180,7 +201,10 @@ uint32_t __fastcall PhantomRowDetour(void* Chr) {
     uintptr_t MyVtbl = 0, ItsVtbl = 0;
     int32_t   Generator = 0;
     const bool SameClass = ReadPtr(Local, &MyVtbl) && ReadPtr(Here, &ItsVtbl) && MyVtbl == ItsVtbl;
-    const bool IsPlayer  = SameClass && ReadI32(Here + kGeneratorInChr, &Generator) && Generator == -1;
+    const bool PlayerShaped = SameClass && ReadI32(Here + kGeneratorInChr, &Generator) && Generator == -1;
+    // Player-shaped is not enough: red phantoms and other NPC phantoms are built the
+    // same way. Only a character one of the network player slots holds is a player.
+    const bool IsPlayer = PlayerShaped && IsSessionPlayerCharacter(Here);
     if (IsPlayer) {
         g_partnerChr.store(Here);
         g_partnerChrAt.store(GetTickCount64());
@@ -190,10 +214,13 @@ uint32_t __fastcall PhantomRowDetour(void* Chr) {
         int32_t Mine = 0;
         ReadI32(Local + kGeneratorInChr, &Mine);
         LOG_INFO("[NPC] %p is built like a player; chr+0x110 = %d (this player's own: %d) -> %s",
-                 Chr, Generator, Mine, IsPlayer ? "the partner" : "a human-shaped NPC");
+                 Chr, Generator, Mine,
+                 IsPlayer ? "the partner" : PlayerShaped ? "an NPC phantom (no player slot holds it)" : "a human-shaped NPC");
     }
 
-    const bool Solid = g_solidEnabled.load() && Session::SessionManager::GetInstance().IsActive();
+    // Only the partner is drawn solid (0.2.2, second report point 11: red phantoms, NPCs
+    // and enemies look the way the game draws them).
+    const bool Solid = g_solidEnabled.load() && IsPlayer && Session::SessionManager::GetInstance().IsActive();
 
     static std::atomic<uint32_t> s_logged{ 0 };
     if (Stock != 0 && s_logged.fetch_add(1) < 40) {
@@ -330,9 +357,83 @@ void SetNpcTalkEnabled(bool on) {
 
 void SetNpcSolidEnabled(bool on) {
     g_solidEnabled.store(on);
-    LOG_INFO("[NPC] the world's other characters: %s", on
-             ? "drawn solid (npc_solid=true)"
-             : "as the game draws them for a phantom, see-through (npc_solid=false)");
+    LOG_INFO("[NPC] the partner's character: %s", on
+             ? "drawn solid, as a player and not a phantom; everyone else as the game draws them (npc_solid=true)"
+             : "as the game draws it (npc_solid=false)");
+}
+
+bool IsSessionPlayer(uintptr_t chr) {
+    return IsSessionPlayerCharacter(chr);
+}
+
+// A talk with an NPC is open right now.
+//
+// [[GMImp+0x70]+0x48] is EventTalkManager; +0x40 is the int32 handle of the NPC the talk
+// action (exe+0x452C80, MOV dword [rcx+0x40],eax) put there, 0 when there is none (the
+// constructor exe+0x194080 writes 0 and, separately, +0x44). 0.2.1 read eight bytes there,
+// taking in +0x44: on 17.09 the host's first "answered no while talking" came at 16:24:15,
+// fifteen minutes before its first talk (16:39:27), and from then on every event script
+// that asked "in multiplayer?" got "no" all session. Read as the int32 it is -- and because
+// nothing seen clears it when a talk is over, only while the character it names exists and
+// stands within kTalkRangeM of this player. Game thread (a virtual call on the characters).
+namespace {
+constexpr uint32_t kHandleToChr = 0x17B830;   // (&handle) -> the character, or 0
+constexpr float    kTalkRangeM  = 6.0f;
+using HandleToChrFn = uintptr_t(__fastcall*)(const int32_t*);
+using ChrPosFn      = const float*(__fastcall*)(void*, float*);
+
+// The handle can outlive the NPC it named, and the resolver (a switch on the handle's
+// low nibble, exe+0x17B830) hands back whatever sits in that slot now. Before a virtual
+// call on it: its vtable and the slot's target both lie inside the game's own image.
+bool InGameImage(uintptr_t P) {
+    static const uintptr_t Base = ExeBase();
+    static const uintptr_t End = [] {
+        const auto* Dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(Base);
+        const auto* Nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(Base + Dos->e_lfanew);
+        return Base + Nt->OptionalHeader.SizeOfImage;
+    }();
+    return P >= Base && P < End;
+}
+
+bool TalkOpenNearbySafe(float* Distance) {
+    *Distance = -1.0f;
+    __try {
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+        const uintptr_t Events = Gm ? *reinterpret_cast<const uintptr_t*>(Gm + 0x70) : 0;
+        const uintptr_t TalkMgr = Events ? *reinterpret_cast<const uintptr_t*>(Events + 0x48) : 0;
+        const uintptr_t Local = Gm ? *reinterpret_cast<const uintptr_t*>(Gm + 0xD0) : 0;
+        if (!TalkMgr || !Local) return false;
+        const int32_t Handle = *reinterpret_cast<const int32_t*>(TalkMgr + 0x40);
+        if (!Handle) return false;
+        const uintptr_t Npc = reinterpret_cast<HandleToChrFn>(ExeBase() + kHandleToChr)(&Handle);
+        if (!Npc || Npc == Local) return false;
+        const uintptr_t NpcVtbl = *reinterpret_cast<const uintptr_t*>(Npc);
+        const uintptr_t LocalVtbl = *reinterpret_cast<const uintptr_t*>(Local);
+        if (!NpcVtbl || !LocalVtbl) return false;
+        if (!InGameImage(NpcVtbl) || !InGameImage(LocalVtbl)) return false;
+        const uintptr_t NpcPosAt = *reinterpret_cast<const uintptr_t*>(NpcVtbl + 0x148);
+        const uintptr_t LocalPosAt = *reinterpret_cast<const uintptr_t*>(LocalVtbl + 0x148);
+        if (!InGameImage(NpcPosAt) || !InGameImage(LocalPosAt)) return false;
+        const ChrPosFn NpcPos = reinterpret_cast<ChrPosFn>(NpcPosAt);
+        const ChrPosFn LocalPos = reinterpret_cast<ChrPosFn>(LocalPosAt);
+        alignas(16) float A[4] = {}, B[4] = {};
+        const float* P = NpcPos(reinterpret_cast<void*>(Npc), A);
+        const float* Q = LocalPos(reinterpret_cast<void*>(Local), B);
+        if (!P || !Q) return false;
+        const float Dx = P[0] - Q[0], Dy = P[1] - Q[1], Dz = P[2] - Q[2];
+        const float Sq = Dx * Dx + Dy * Dy + Dz * Dz;
+        if (!(Sq == Sq)) return false;
+        *Distance = Sq;
+        return Sq <= kTalkRangeM * kTalkRangeM;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+} // namespace
+
+bool IsTalkOpenNearby() {
+    float Distance = 0.0f;
+    return TalkOpenNearbySafe(&Distance);
 }
 
 uintptr_t GetPartnerCharacter(uint64_t maxAgeMs) {

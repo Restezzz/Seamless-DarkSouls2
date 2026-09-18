@@ -6,6 +6,40 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 Каждая версия лежит на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) двумя
 архивами: `Seamless-DS2-<версия>-host.zip` для хоста и `Seamless-DS2-<версия>-joiner.zip` для друзей.
 
+## 0.2.2 — not released yet / ещё не выпущено
+
+Fixes for the two reports of 17.09 and the answers to the 0.2.1 checklist. **None of it has been checked in play
+yet**; this section is rewritten from the test's results before the release.
+Исправления по двум отчётам 17.09 и ответам на чек-лист 0.2.1. **В игре пока ничего не проверено**; перед релизом
+раздел переписывается по итогам теста.
+
+**Changed / Изменено**
+
+- Enemies and bosses as the host has them in every map a guest loads, not only where it joined: killed enemies stay
+  dead, a boss killed long ago is not standing in its arena; the guest's own kills are counted too.
+  Мобы и боссы как у хоста на каждой карте, которую грузит гость, а не только там, где он зашёл: убитые мобы мертвы,
+  давно убитый босс не стоит в арене; свои убийства гостя тоже считаются.
+- A boss fight ends and pays out when one player is down; a guest walking into the arena first wakes the boss.
+  Бой с боссом завершается и даёт награды, если один из игроков лежит; гость, первым вошедший в арену, будит босса.
+- A guest is no longer thrown out on arrival when the host's summon slot was dropped (Cathedral of Blue, the host
+  crossing into another area).
+  Гостя больше не выкидывает при входе, когда у хоста сброшен слот призыва («Синий собор», хост переходит границу).
+- The lift: map event scripts get the game's own answer for a guest again. Old chests the host opened are open for
+  the guest, their contents by the guest's own save. NPCs hit by a guest still talk. Friendly fire keeps players out
+  of each other's lock-on. A guest down far from the host watches the host.
+  Лифт: скрипты событий карты у гостя снова получают ответ самой игры. Старые сундуки, открытые хостом, открыты и
+  у гостя, содержимое — по его сохранению. NPC, которых ударил гость, разговаривают. «Огонь по своим» не даёт
+  наводиться друг на друга. Гость, погибший далеко от хоста, смотрит на хоста.
+- A once-only enemy (a crystal lizard) whose drop a guest took in the host's world is dead at home too.
+  Одноразовый моб (кристальная ящерица), чей дроп гость забрал в мире хоста, мёртв и дома.
+- Earlier in 0.2.2: travel and bonfire notifications, the host's effigy no longer blocks the partner, cutscene
+  transfers in co-op, dialogue progress and NPC items, doors opened with a guest's key, only players drawn as humans.
+  Раньше в 0.2.2: уведомления о перемещениях и кострах, фигурка хоста больше не мешает напарнику, переходы с
+  катсценой в коопе, прогресс диалогов и предметы от NPC, двери ключом гостя, человеком рисуются только игроки.
+
+Both players need 0.2.2: three new packets between the players.
+Нужна 0.2.2 у обоих: три новых пакета между игроками.
+
 ## 0.2.1 — 2026-09-17
 
 Fixes for the problems of the 0.2.0 test, with the results of a two-player test of this build on 17.09 — the full

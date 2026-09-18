@@ -24,7 +24,8 @@ void RequestImmediateSignPoll();
 
 // Automatic join: the joiner places a sign once the host accepts it, and the
 // host summons that sign as soon as it arrives. Both obey auto_summon in the ini.
-void RequestAutoSignPlacement();
+bool RequestAutoSignPlacement();   // false when no sign was queued
+void ForgetAutoSignPlacement();    // the lobby was left: the next join places a sign at once
 void ArmAutoSummon();
 
 // Leave the other player's world through the game's own return path -- the one
@@ -48,6 +49,9 @@ void SetLootSyncEnabled(bool enabled);
 bool IsLootSyncEnabled();
 void ToggleLootSyncNow();   // F4: flip it and show or hide the items in the loaded areas
 void LootSyncGameTick();    // runs the queued F4 work on the game thread
+// In this player's own world, right before a map's generators are made: once-only enemies it
+// killed in someone else's world and took the drop of are counted as killed (loot_sync.cpp).
+void ApplyHomeKillsBeforeArea(void* genMgr, int32_t areaIndex);
 
 // Being summoned from anywhere (summon_accept.cpp). The game turns down a summon
 // on its own at once where signs are not allowed (Majula and the like); a sign
@@ -57,12 +61,18 @@ void ArmSummonAccept();
 // The game declines every summon right now: at a bonfire, in a menu, in an
 // event (the multiplayer manager's busy counter). No sign goes down meanwhile.
 bool IsSummonBusy();
+// The host confirms a guest's summon slot on arrival; a slot the game dropped is reserved again,
+// and the lobby's join goes through if it still says no (summon_accept.cpp, ini join_slot_confirm).
+void SetJoinSlotConfirm(bool on);
 void WarnBusyForSign();         // tells the player the game is busy (bonfire, menu, event)
 // Around the mod's own call of the game's sign creation (player_sync.cpp):
 // where the game finds no spot for a sign the player's own spot is used, and a
 // live-sign flag a failed create left behind is taken down first.
 void SetModSignPlacement(bool on);
 bool ClearStaleLiveSign(void* signManager);
+// Game thread: take the manager's live sign down once the server has created it.
+enum class PlacedSignTakeDown { TakenDown, NotCreatedYet, NoSign, Failed };
+PlacedSignTakeDown TakeDownPlacedSign(void* signManager);
 // Game thread: a summon declined while busy is followed by a fresh sign once free.
 void SummonAcceptGameTick();
 
@@ -88,13 +98,16 @@ void NotePartnerBonfires(const void* entries, uint32_t count);
 // The host travelled by bonfire (packet HostTravelled). A guest in its world
 // leaves at once and joins again where the host went, once it has arrived.
 void NoteHostTravelled(int32_t map, int32_t bonfire);
+// Either player travelled (packet PlayerTravelled): a notification on the game thread
+// saying where to. Network thread.
+void NotePartnerTravelled(int32_t map, int32_t target, int32_t type, const std::string& from);
 
 // Progress already made, handed over once when a session starts (packet
 // FlagBulk). The flag diff only reports what changes while both are connected,
 // so a guest joining later would never learn about the host's bonfires, fog
 // gates and bosses. Set-only, and written on the game's own thread.
 void SendFlagCatchUp();
-void NoteRemoteFlagBulk(uint32_t group, const uint8_t* bits, uint32_t bytes);
+void NoteRemoteFlagBulk(uint32_t group, const uint8_t* bits, uint32_t bytes, uint32_t offset);
 // Whether the player agreed to progress being written into this save (ini
 // flag_sync). Asked by anything that would change the save rather than the
 // session: the partner's bonfires in byte +0x02, for one.
@@ -119,6 +132,12 @@ void SetNpcTalkEnabled(bool on);
 // The partner's character object, as last seen by the code that draws it, or 0
 // if nothing that recent is known. The camera needs it (docs §3.23).
 uintptr_t GetPartnerCharacter(uint64_t maxAgeMs);
+// A character one of the game's five network player slots holds ([netRoot+0x20]+0x1E8+i*0xD0):
+// another player of this session, never an NPC phantom (npc_talk.cpp).
+bool IsSessionPlayer(uintptr_t chr);
+// A talk with an NPC is open: EventTalkManager's int32 handle names a character standing
+// within a few metres of this player (npc_talk.cpp). Game thread.
+bool IsTalkOpenNearby();
 
 // How the two players stand towards each other -- no damage, friendly fire
 // without lock-on, or a real fight (pvp_modes.cpp, docs §3.25). The host picks
@@ -176,7 +195,57 @@ bool GuestBossRewardDue();
 // A guest's world as the game builds it (guest_world.cpp, docs §3.37): NPC scripts
 // and the NPC factory asked "multiplayer world?" answered as for the owner, and a
 // joining guest's characters put in only once the host's world has arrived.
-bool InstallGuestWorld(bool talkScripts, bool npcLocal, bool waitForSnapshot);
+// liveStates: the host's enemy live states from the join snapshot, kept when the join
+// map's generators are not made yet and applied once they are (ini enemy_states_at_join).
+bool InstallGuestWorld(bool talkScripts, bool npcLocal, bool waitForSnapshot, bool liveStates);
+void GuestWorldTick();   // game thread: probe, the applied states counted again later
+// Map event scripts asking "someone else's multiplayer world?" (ESD 130602) get the game's answer
+// for a guest; true answers them "no" like the talk scripts, as up to 0.2.1 (ini
+// guest_event_scripts_owner).
+void SetGuestEventScriptsOwner(bool on);
+// A guest's hits on the host's world's characters do not count towards their anger, so an NPC hit
+// a few times still talks (npc_progress.cpp, ini guest_npc_hits_ignored).
+void SetGuestNpcHitsIgnored(bool on);
+uintptr_t CurrentEventTask();                                           // mp_gates.cpp, 0 outside one
+bool ReadEventTaskKey(uintptr_t task, uint32_t* map, int32_t* event);   // [task+0x28], [[task+8]+0x18]
+// Enemies as the host has them in every map a guest loads (enemy_reconcile.cpp, docs §3.47):
+// the host's killed generator records and its kill counters, pushed by the host every few
+// seconds when they change, applied by the guest (dead wins, the higher count wins).
+bool InstallEnemyReconcile(bool deadRecords, bool killCounts);
+void EnemyReconcileTick();                                        // game thread
+void EnemyReconcileBeforeArea(void* genMgr, int32_t areaIndex);   // game thread, before an area's generators are made
+void EnemyReconcileAfterArea(void* genMgr, int32_t areaIndex);    // game thread, right after
+void EnemyReconcileNow();                                         // game thread, before the enemy sync is armed
+void ForgetHostEnemyStates(const char* why);                      // game thread: a world reset here, or out of the world
+void NoteHostEnemyDeadList(int32_t map, uint8_t source, const uint16_t* ids, uint16_t count);      // network thread
+void NoteHostKillCounts(int32_t map, const uint16_t* index, const uint8_t* kills, uint16_t count); // network thread
+// A boss fight that ends while one of the players is down (boss_down.cpp, docs §3.47): the
+// host's event scripts carry on, and the decided fight's phases 2-3 run for a player who is
+// down, so the souls and the reward are handed out.
+bool InstallBossDown(bool enabled);
+// A guest standing in a boss's arena wakes the boss on the host, as the host would (boss_arena.cpp,
+// docs §3.47, ini boss_guest_starts).
+bool InstallBossArena(bool enabled);
+// A guest down far from its partner in the same map: the world is loaded around the partner and
+// the camera follows it (death_camera.cpp, ini far_death_camera). Game thread.
+bool InstallFarDeathCamera(bool enabled);
+bool StartFarSpectate(uintptr_t partner);
+void StopFarSpectate(const char* why);
+bool FarSpectating();
+bool PartnerAliveReported();               // the partner's own PlayerDeath / PlayerRespawn
+bool GuestHeldForBattle(int32_t battle);   // a guest's return is held for this battle
+// Chests the host has open, opened for a guest in every map it loads (chest_lids.cpp, docs
+// §3.47); what lies in them follows the guest's own save (loot_sync.cpp).
+void SetChestLidsReconcile(bool on);
+void ChestLidsTick();                        // game thread
+void ApplyHostChestLids(uint32_t areaId);    // game thread, right after an area's objects were restored
+void NoteHostChestLids(int32_t map, uint8_t source, const void* entries, uint16_t count);   // network thread, ChestLidEntry[]
+// A guest's kills in the host's world counted in the session's kill counters (player_sync.cpp,
+// the multiplayer predicate asked from exe+0x40FE79).
+void SetGuestKillCounts(bool on);
+// A guest's death result is never built as the host's while in the host's world
+// (death_result_type.cpp, ini guest_result_type_fix; off: logged only).
+bool InstallDeathResultType(bool enabled);
 
 // Enemy drops for a guest from every kill (guest_drops.cpp, docs §3.40).
 bool InstallGuestDrops(bool enabled);
@@ -187,10 +256,21 @@ void ForgetGuestDropRolls();    // a rest: every enemy can drop again
 // covenants while talking, a host summoning from Majula; probes for the ship table
 // and Pharros contraptions.
 bool InstallMpGates(bool enabled);
+// The area's protection against invaders (a burnt Human Effigy) and the lobby partner's
+// summon (mp_gates.cpp): the partner is let through, invaders are not (ini effigy_summon).
+void SetEffigySummon(bool on);
+// Cutscene transfers the game hides while in multiplayer (the Pursuer's eagle, the
+// Wharf ship, portals, DLC entrances): offered in co-op (ini transfer_events_solo).
+void SetTransferEventsSolo(bool on);
+void SetPartnerSummonStarting(bool on);   // game thread, around the host's own start of the partner's summon
+void NotePartnerSummonSent();              // RequestSummonSign went out for the partner
+bool ReadAreaProtection(int32_t* area, float* secondsLeft);   // the current area: protected?
 bool RecentSearchHit();   // an object was "searched" in the last two seconds
 
 // Travelling in a co-op session without leaving it (travel_sync.cpp, docs §3.38).
-bool InstallTravelSync(bool enabled);
+// detachWhenApart: the enemy sync table is let go while the players stand in different
+// maps (ini enemy_detach_when_apart).
+bool InstallTravelSync(bool enabled, bool detachWhenApart);
 void NoteLocalTravel(int32_t rawMap);      // a travel warp was just taken here
 void NotePartnerRawMap(int32_t rawMap);    // network thread: the map the partner stands in
 void TravelResyncTick();                   // game thread
@@ -201,6 +281,14 @@ int ForgetStaleEnemyEntries(uintptr_t enemyManager);
 // Both players stand in the same map, by the game's own map value on each side (the
 // partner's from its PlayerMap packets, if one came in the last few seconds).
 bool PlayersShareMap();
+// The game's own names in its current language (game_text.cpp): "" when not known yet
+// or not showable with the overlay's font. Game thread only.
+std::string GameBonfireName(int32_t bonfireId);
+// A bonfire one player lights is lit for the other (bonfire_lit.cpp).
+bool InstallBonfireLit();
+void NotePartnerBonfireLit(int32_t id, int32_t map, const std::string& from);   // network thread
+void BonfireLitGameTick();   // game thread
+std::string GameMapName(int32_t rawMap);
 // Probe: both characters' bonfire-travel pose numbers for a while after either
 // player travels (travel_sync.cpp). Game thread.
 void WatchPoses();

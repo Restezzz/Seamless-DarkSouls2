@@ -19,6 +19,32 @@
 // passes for its own sign placement. For the lobby's host it lets the partner in;
 // the other two checks are logged when they say no, in case it is one of them.
 //
+// The area's protection against invaders (17.09, point 8 of the second report). A
+// Human Effigy burnt at a bonfire (exe+0x17F310, return exe+0x17F3C9) arms a per-area
+// timer in NetSvrProperties ([[netRoot+0x30]+0x68]+0x18: up to 50 {area, seconds}),
+// and exe+0x24F600(table, area) says "protected". The host's summon starter
+// exe+0x2A2CA0 asks it for the current area (exe+0x24F690, return exe+0x2A2D01) and
+// starts no job, and the accept constructor's sign-type check exe+0x291C30 asks it
+// too (return exe+0x291C69) -- a refusal there is code 2 and a guest waiting forever.
+// From 15:00:46 to 15:03:10 eight summons of the partner's signs in a protected Forest
+// of Fallen Giants started nothing; the first after the host took the protection off
+// at a bonfire went out. The protection is there for invaders: for those two questions,
+// asked on the lobby partner's behalf, the answer is "not protected" (ini
+// effigy_summon). Invasions, the HUD, the bonfire menu and the server status keep the
+// game's answer.
+//
+// Cutscene transfers (17.09, point 9 of the second report: the eagle at the Pursuer's
+// nest offered nothing to either player). The map's own event script hides them: event
+// 7000 of event_m10_10_00_00.esd builds EventConditionNet_IsMultiPlay (command 140601,
+// evaluated at exe+0x46FE70 = exe+0x513580(session) == [cond+0x10], the call returning
+// to exe+0x46FE99) and enables the nest's action only once "multiplayer == 0" holds; a
+// second group withdraws it on "multiplayer == 1". The ship at No-man's Wharf (event
+// 14000) and eighteen more transfers -- giant memories, the Dark Chasm portals, the DLC
+// entrances and exits -- are gated the same way. For those events alone, while a lobby
+// is up, "in multiplayer" is answered no (ini transfer_events_solo); the other events
+// that ask (bell keepers, boss-battle events) keep the game's answer. An event task's
+// id is [task+0x28] and its map [[task+0x08]+0x18] (exe+0x1966D0, exe+0x196970).
+//
 // Probes. The ship's map table at No-man's Wharf never offered its prompt while a
 // guest was in the host's world, most likely an event script asking "multiplayer?"
 // -- each event that asks is logged once with its id, so the next session names
@@ -66,12 +92,20 @@ constexpr uint32_t kSummonCheck2       = 0x2C6460;   // (mp, desc) -> AL
 constexpr uint32_t kSummonCheck2Ret    = 0x2BC5D6;
 constexpr uint32_t kTaskUpdate         = 0x196B80;   // (event task, arg)
 constexpr uint32_t kIsSearch           = 0x4705E0;   // (condition) -> AL
+constexpr uint32_t kAreaProtected      = 0x24F600;   // (protection table, area) -> AL
+constexpr uint32_t kProtectSecondsLeft = 0x24F520;   // (protection table, area) -> XMM0 seconds
+constexpr uint32_t kNetRoot            = 0x1616CF8;
+constexpr uint32_t kProtectStartRet    = 0x2A2D01;   // the summon starter exe+0x2A2CA0
+constexpr uint32_t kProtectAcceptRet   = 0x291C69;   // the sign-type check exe+0x291C30
+constexpr ULONGLONG kPartnerSummonFreshMs = 30000;
 
 using Fn1  = uint64_t(__fastcall*)(void*);
 using Fn2  = uint64_t(__fastcall*)(void*, void*);
 using Fn4  = uint64_t(__fastcall*)(void*, void*, void*, void*);
 using CountFn = uint64_t(__fastcall*)(int32_t, char);
 using SlotFn  = uint64_t(__fastcall*)(void*, uint8_t);
+using ProtectFn = uint64_t(__fastcall*)(void* table, int32_t area);
+using SecondsFn = float(__fastcall*)(void* table, int32_t area);
 
 Fn1     g_inMultiplayer = nullptr;
 CountFn g_playerCount   = nullptr;
@@ -80,6 +114,28 @@ Fn4     g_check1        = nullptr;
 Fn2     g_check2        = nullptr;
 Fn2     g_taskUpdate    = nullptr;
 Fn1     g_isSearch      = nullptr;
+ProtectFn g_areaProtected = nullptr;
+
+std::atomic<bool>      g_effigySummon{ true };
+std::atomic<bool>      g_transferSolo{ true };
+
+// {raw map, event id} of every cutscene transfer hidden while in multiplayer
+// (scratchpad re_022_nest\transfer_events_gated.txt).
+struct GatedEvent {
+    uint32_t Map;
+    int32_t  Event;
+};
+constexpr GatedEvent kGatedTransfers[] = {
+    { 0x0A0A0000, 7000 },     { 0x0A120000, 14000 },   { 0x0A0A0000, 37000 },   { 0x0A0A0000, 37010 },
+    { 0x0A0A0000, 37020 },    { 0x0A190000, 4001 },    { 0x0A200000, 4001 },    { 0x14150000, 4001 },
+    { 0x14180000, 1000000 },  { 0x32240000, 53000 },   { 0x32240000, 55000 },   { 0x0A130000, 2000000 },
+    { 0x0A190000, 1000000 },  { 0x0A200000, 3000000 }, { 0x32230000, 52000 },   { 0x32240000, 52000 },
+    { 0x32250000, 52000 },    { 0x32250000, 4000 },    { 0x0A0E0000, 9000 },    { 0x0A020000, 5000 },
+};
+std::atomic<ULONGLONG> g_partnerSummonAt{ 0 };
+std::atomic<ULONGLONG> g_protectLogAt{ 0 };
+thread_local bool      t_partnerStart = false;
+thread_local bool      t_partnerAccept = false;
 
 std::atomic<bool>      g_enabled{ true };
 std::atomic<uint32_t>  g_talkAnswers{ 0 };
@@ -100,37 +156,52 @@ bool ReadPtr(uintptr_t Addr, uintptr_t* Out) {
     }
 }
 
-// A talk with an NPC is open: EventTalkManager holds the NPC's handle.
+// A talk with an NPC is open (npc_talk.cpp). Until 0.2.2 this read eight bytes where the
+// handle is four and was true all session long -- every event script's "in multiplayer?"
+// answered "no" in a lobby (17.09, second report).
 bool TalkOpen() {
-    uintptr_t Gm = 0, Events = 0, Talk = 0, Npc = 0;
-    return ReadPtr(ExeBase() + kGameManagerImp, &Gm) && ReadPtr(Gm + 0x70, &Events) &&
-           ReadPtr(Events + 0x48, &Talk) && ReadPtr(Talk + 0x40, &Npc);
+    return IsTalkOpenNearby();
 }
 
 bool InLobby() {
     return Session::SessionManager::GetInstance().IsActive();
 }
 
-// Each event that asks about multiplayer, logged once (the first 64 of them).
-void NoteTaskAsking(const char* What, uintptr_t Task, uint64_t Answer) {
-    static std::atomic<int32_t> s_seen[64];
-    static std::atomic<uint32_t> s_count{ 0 };
-    int32_t Id = 0;
-    uint8_t Byte = 0;
+// An event task's id ([task+0x28]) and the raw id of its map ([[task+0x08]+0x18]).
+bool ReadTaskKey(uintptr_t Task, uint32_t* Map, int32_t* Event) {
     __try {
-        Id = *reinterpret_cast<const int32_t*>(Task + 0x24);
-        Byte = *reinterpret_cast<const uint8_t*>(Task + 0x2A);
+        *Event = *reinterpret_cast<const int32_t*>(Task + 0x28);
+        const uintptr_t Area = *reinterpret_cast<const uintptr_t*>(Task + 0x08);
+        *Map = Area ? *reinterpret_cast<const uint32_t*>(Area + 0x18) : 0;
+        return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return;
+        return false;
     }
+}
+
+bool IsGatedTransfer(uint32_t Map, int32_t Event) {
+    for (const GatedEvent& G : kGatedTransfers) {
+        if (G.Map == Map && G.Event == Event) return true;
+    }
+    return false;
+}
+
+// Each event that asks about multiplayer, logged once per map and event (the first 64).
+void NoteTaskAsking(const char* What, uintptr_t Task, uint64_t Answer) {
+    static std::atomic<uint64_t> s_seen[64];
+    static std::atomic<uint32_t> s_count{ 0 };
+    uint32_t Map = 0;
+    int32_t Event = 0;
+    if (!ReadTaskKey(Task, &Map, &Event)) return;
+    const uint64_t Key = (static_cast<uint64_t>(Map) << 32) | static_cast<uint32_t>(Event);
     const uint32_t N = s_count.load();
     for (uint32_t I = 0; I < N && I < 64; ++I) {
-        if (s_seen[I].load() == Id) return;
+        if (s_seen[I].load() == Key) return;
     }
     if (N >= 64) return;
-    s_seen[N].store(Id);
+    s_seen[N].store(Key);
     s_count.store(N + 1);
-    LOG_INFO("[GATES] event %d (+0x2A %u) asks %s -> %llu", Id, static_cast<unsigned>(Byte), What,
+    LOG_INFO("[GATES] event %d of map 0x%08X asks %s -> %llu", Event, Map, What,
              static_cast<unsigned long long>(Answer & 0xFF));
 }
 
@@ -147,7 +218,20 @@ uint64_t __fastcall InMultiplayerDetour(void* Session) {
         }
         return Stock & ~static_cast<uint64_t>(0xFF);
     }
-    if (Ret == kIsMultiPlayRet && t_task) NoteTaskAsking("IsMultiPlay", t_task, Stock);
+    if (Ret == kIsMultiPlayRet && t_task) {
+        uint32_t Map = 0;
+        int32_t Event = 0;
+        if (g_transferSolo.load() && ReadTaskKey(t_task, &Map, &Event) && IsGatedTransfer(Map, Event)) {
+            static std::atomic<uint64_t> s_lastKey{ 0 };
+            const uint64_t Key = (static_cast<uint64_t>(Map) << 32) | static_cast<uint32_t>(Event);
+            if (s_lastKey.exchange(Key) != Key) {
+                LOG_INFO("[GATES] cutscene transfer event %d of map 0x%08X asks whether this is multiplayer -- "
+                         "answered no, so its prompt is offered in co-op", Event, Map);
+            }
+            return Stock & ~static_cast<uint64_t>(0xFF);
+        }
+        NoteTaskAsking("IsMultiPlay", t_task, Stock);
+    }
     return Stock;
 }
 
@@ -180,12 +264,49 @@ uint64_t __fastcall SlotAreaCheckDetour(void* Mgr, uint8_t Type) {
     return (Stock & ~static_cast<uint64_t>(0xFF)) | 1;
 }
 
+bool PartnerSummonRecent() {
+    auto& Lobby = Session::SessionManager::GetInstance();
+    const ULONGLONG At = g_partnerSummonAt.load();
+    return Lobby.IsActive() && Lobby.IsHost() && At && GetTickCount64() - At < kPartnerSummonFreshMs;
+}
+
 uint64_t __fastcall SummonCheck1Detour(void* A, void* B, void* C, void* D) {
+    const bool FromAccept = reinterpret_cast<uintptr_t>(_ReturnAddress()) - ExeBase() == kSummonCheck1Ret;
+    const bool Outer = t_partnerAccept;
+    if (FromAccept && PartnerSummonRecent()) t_partnerAccept = true;
     const uint64_t Stock = g_check1(A, B, C, D);
-    if (!(Stock & 0xFF) && reinterpret_cast<uintptr_t>(_ReturnAddress()) - ExeBase() == kSummonCheck1Ret && InLobby()) {
+    t_partnerAccept = Outer;
+    if (!(Stock & 0xFF) && FromAccept && InLobby()) {
         LOG_INFO("[GATES] summoning the partner: the sign-type check (exe+0x291C30) said no");
     }
     return Stock;
+}
+
+// The two questions about the area's protection asked on the lobby partner's behalf
+// get "not protected"; every other question keeps the game's answer.
+uint64_t __fastcall AreaProtectedDetour(void* Table, int32_t Area) {
+    const uint64_t Stock = g_areaProtected(Table, Area);
+    if (!(Stock & 0xFF)) return Stock;
+    const uintptr_t Ret = reinterpret_cast<uintptr_t>(_ReturnAddress()) - ExeBase();
+    const bool Start = Ret == kProtectStartRet && t_partnerStart;
+    const bool Accept = Ret == kProtectAcceptRet && t_partnerAccept;
+    if (!Start && !Accept) return Stock;
+    const ULONGLONG Now = GetTickCount64();
+    const bool Say = Now - g_protectLogAt.load() > 10000;
+    if (Say) g_protectLogAt.store(Now);
+    auto& Lobby = Session::SessionManager::GetInstance();
+    if (!g_effigySummon.load() || !Lobby.IsActive() || !Lobby.IsHost()) {
+        if (Say) {
+            LOG_INFO("[GATES] area %d is protected against invaders (effigy): the partner's summon %s is refused "
+                     "(effigy_summon=false)", Area, Start ? "start" : "arrival");
+        }
+        return Stock;
+    }
+    if (Say) {
+        LOG_INFO("[GATES] area %d is protected against invaders (effigy) -- the lobby partner's summon %s let through",
+                 Area, Start ? "start" : "arrival");
+    }
+    return Stock & ~static_cast<uint64_t>(0xFF);
 }
 
 uint64_t __fastcall SummonCheck2Detour(void* Mp, void* Desc) {
@@ -216,12 +337,8 @@ uint64_t __fastcall IsSearchDetour(void* Condition) {
     }
     if (s_lastObject.exchange(Object) != Object) {
         int32_t Event = 0;
-        if (t_task) {
-            __try {
-                Event = *reinterpret_cast<const int32_t*>(t_task + 0x24);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
-            }
-        }
+        uint32_t Map = 0;
+        if (t_task) ReadTaskKey(t_task, &Map, &Event);
         LOG_INFO("[GATES] object %d searched (event %d) -- the IsHost answers of the next two seconds follow", Object, Event);
     }
     return Stock;
@@ -236,6 +353,16 @@ bool HookAt(uint32_t Rva, void* Detour, void** Original, const char* What) {
 }
 
 } // namespace
+
+// The event task this thread is updating right now (exe+0x196B80), 0 outside one -- what tells
+// an event script from a talk script when both ask the same thing (guest_world.cpp).
+uintptr_t CurrentEventTask() {
+    return t_task;
+}
+
+bool ReadEventTaskKey(uintptr_t Task, uint32_t* Map, int32_t* Event) {
+    return ReadTaskKey(Task, Map, Event);
+}
 
 bool InstallMpGates(bool Enabled) {
     static bool Installed = false;
@@ -256,11 +383,56 @@ bool InstallMpGates(bool Enabled) {
                "event task update");
         HookAt(kIsSearch, reinterpret_cast<void*>(&IsSearchDetour), reinterpret_cast<void**>(&g_isSearch),
                "object searched");
+        HookAt(kAreaProtected, reinterpret_cast<void*>(&AreaProtectedDetour),
+               reinterpret_cast<void**>(&g_areaProtected), "the area's protection against invaders");
     }
     LOG_INFO("[GATES] %s", Enabled
         ? "while talking, NPC scripts see a player alone (covenants); the lobby's host can summon from Majula"
         : "off (mp_gates=false): the game's own answers, probes only");
     return g_inMultiplayer != nullptr;
+}
+
+void SetTransferEventsSolo(bool On) {
+    g_transferSolo.store(On);
+    LOG_INFO("[GATES] cutscene transfers (the eagle, the ship, portals, DLC entrances): %s",
+             On ? "offered in co-op" : "the game's own rule (transfer_events_solo=false): not while in multiplayer");
+}
+
+void SetEffigySummon(bool On) {
+    g_effigySummon.store(On);
+    LOG_INFO("[GATES] effigy protection: %s", On ? "invaders kept out, the lobby partner's summon let through"
+                                                 : "the game's own rule (effigy_summon=false): no summons while protected");
+}
+
+void SetPartnerSummonStarting(bool On) {
+    t_partnerStart = On;
+}
+
+void NotePartnerSummonSent() {
+    g_partnerSummonAt.store(GetTickCount64());
+}
+
+// The current area's protection, read the game's own way: protected and seconds left.
+bool ReadAreaProtection(int32_t* AreaOut, float* SecondsOut) {
+    *AreaOut = 0;
+    *SecondsOut = 0.0f;
+    __try {
+        const uintptr_t Root = *reinterpret_cast<const uintptr_t*>(ExeBase() + kNetRoot);
+        if (!Root) return false;
+        const uintptr_t Props = *reinterpret_cast<const uintptr_t*>(Root + 0x30);
+        const uintptr_t Owner = Props ? *reinterpret_cast<const uintptr_t*>(Props + 0x68) : 0;
+        const uintptr_t List = *reinterpret_cast<const uintptr_t*>(Root + 0x20);
+        const uintptr_t Local = List ? *reinterpret_cast<const uintptr_t*>(List + 0x5B8) : 0;
+        if (!Owner || !Local) return false;
+        const int32_t Area = *reinterpret_cast<const int32_t*>(Local + 0x18);
+        void* Table = reinterpret_cast<void*>(Owner + 0x18);
+        *AreaOut = Area;
+        const bool Protected = (reinterpret_cast<ProtectFn>(ExeBase() + kAreaProtected)(Table, Area) & 0xFF) != 0;
+        if (Protected) *SecondsOut = reinterpret_cast<SecondsFn>(ExeBase() + kProtectSecondsLeft)(Table, Area);
+        return Protected;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
 }
 
 bool RecentSearchHit() {

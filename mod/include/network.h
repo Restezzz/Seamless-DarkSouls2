@@ -86,6 +86,20 @@ enum class PacketType : uint8_t {
     // What an NPC's talk gave this player (npc_progress.cpp): the partner's game adds
     // each item it has none of, so a key or the Estus Flask reaches both players.
     NpcGift = 0x42,
+    // A travel either player just took, for the other's notification (17.09, 0.2.2
+    // point 6): the host's HostTravelled drives the guest's own logic, this one only
+    // says where the partner went.
+    PlayerTravelled = 0x43,
+    // A bonfire the sender just lit (bonfire_lit.cpp): lit for the receiver too.
+    BonfireLit = 0x44,
+    // The host's killed enemies of one map, by generator id (enemy_reconcile.cpp): a guest
+    // gets the host's enemies from the join snapshot for the join map only.
+    EnemyDeadList = 0x45,
+    // The host's kill counters of one map (enemy_reconcile.cpp): what keeps a boss dead.
+    KillCounts = 0x46,
+    // The host's open chests of one map (chest_lids.cpp): a chest open at the host's is opened
+    // for the guest too, its contents by the guest's own save.
+    ChestLids = 0x47,
 
     // Custom data
     ChatMessage = 0x40,
@@ -187,7 +201,58 @@ struct FlagBulkPacket {
     PacketHeader header;
     uint32_t     group;
     uint32_t     bytes;      // how many of the array below are filled
+    uint32_t     offset;     // where in the group's bytes the array starts (0.2.2: groups 10 and 20 are 1250 bytes)
     uint8_t      bits[640];
+};
+
+struct BonfireLitPacket {
+    PacketHeader header;
+    int32_t      id;        // the bonfire id
+    int32_t      map;       // the sender's raw map id when it lit it
+};
+
+// Generator records the host has killed and not respawned yet, in one map: kind
+// [rec+0x76]&3 set, stay [rec+0x7A] bit 1 set, no-respawn [rec+0x76]&0xC clear.
+struct EnemyDeadListPacket {
+    PacketHeader header;
+    int32_t      map;       // raw map id
+    uint16_t     count;     // ids filled
+    uint8_t      source;    // 0 generators loaded on the host, 1 the host's cache of maps it left
+    uint8_t      reserved;
+    uint16_t     ids[256];  // (u16)[rec+0x68]
+};
+
+// The host's kill counters of one map: its store slot's sorted generator indices and
+// how many times each was killed.
+struct KillCountsPacket {
+    PacketHeader header;
+    int32_t      map;       // raw map id
+    uint16_t     count;     // entries filled
+    uint16_t     reserved;
+    uint16_t     index[256];
+    uint8_t      kills[256];
+};
+
+// One chest: its object id and the lid's state at the host's.
+struct ChestLidEntry {
+    uint32_t id;
+    uint8_t  state;
+};
+
+struct ChestLidsPacket {
+    PacketHeader  header;
+    int32_t       map;       // raw map id
+    uint16_t      count;     // entries filled
+    uint8_t       source;    // 0 loaded on the host, 1 the host's save record
+    uint8_t       reserved;
+    ChestLidEntry entries[200];
+};
+
+struct PlayerTravelledPacket {
+    PacketHeader header;
+    int32_t      map;       // the warp request's raw map id
+    int32_t      target;    // the bonfire id (type 3), or the request's id (type 4: ship, cutscene)
+    int32_t      type;      // the warp request's type
 };
 
 struct HostTravelledPacket {

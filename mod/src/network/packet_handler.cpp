@@ -77,6 +77,44 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
             }
             break;
 
+        case PacketType::EnemyDeadList:
+            if (packet->size >= sizeof(EnemyDeadListPacket)) {
+                const auto* List = reinterpret_cast<const EnemyDeadListPacket*>(packet);
+                const uint16_t Count = List->count < 256 ? List->count : 256;
+                DS2Coop::Sync::NoteHostEnemyDeadList(List->map, List->source, List->ids, Count);
+            }
+            break;
+
+        case PacketType::KillCounts:
+            if (packet->size >= sizeof(KillCountsPacket)) {
+                const auto* Kills = reinterpret_cast<const KillCountsPacket*>(packet);
+                const uint16_t Count = Kills->count < 256 ? Kills->count : 256;
+                DS2Coop::Sync::NoteHostKillCounts(Kills->map, Kills->index, Kills->kills, Count);
+            }
+            break;
+
+        case PacketType::ChestLids:
+            if (packet->size >= sizeof(ChestLidsPacket)) {
+                const auto* Lids = reinterpret_cast<const ChestLidsPacket*>(packet);
+                const uint16_t Count = Lids->count < 200 ? Lids->count : 200;
+                DS2Coop::Sync::NoteHostChestLids(Lids->map, Lids->source, Lids->entries, Count);
+            }
+            break;
+
+        case PacketType::BonfireLit:
+            if (packet->size >= sizeof(BonfireLitPacket)) {
+                const auto* Lit = reinterpret_cast<const BonfireLitPacket*>(packet);
+                DS2Coop::Sync::NotePartnerBonfireLit(Lit->id, Lit->map, sender.playerName);
+            }
+            break;
+
+        case PacketType::PlayerTravelled:
+            if (packet->size >= sizeof(PlayerTravelledPacket)) {
+                const auto* Travel = reinterpret_cast<const PlayerTravelledPacket*>(packet);
+                DS2Coop::Sync::NotePartnerTravelled(Travel->map, Travel->target, Travel->type, sender.playerName);
+            }
+            break;
+
         case PacketType::HostTravelled:
             if (packet->size >= sizeof(HostTravelledPacket)) {
                 const auto* Travel = reinterpret_cast<const HostTravelledPacket*>(packet);
@@ -116,7 +154,7 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
                 // The byte count comes off the wire: never past the array it describes.
                 const uint32_t Bytes = Bulk->bytes <= sizeof(Bulk->bits) ? Bulk->bytes
                                                                          : static_cast<uint32_t>(sizeof(Bulk->bits));
-                DS2Coop::Sync::NoteRemoteFlagBulk(Bulk->group, Bulk->bits, Bytes);
+                DS2Coop::Sync::NoteRemoteFlagBulk(Bulk->group, Bulk->bits, Bytes, Bulk->offset);
             }
             break;
 
