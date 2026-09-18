@@ -713,6 +713,17 @@ std::vector<std::pair<uint32_t, bool>> g_pendingRemoteFlags;
 ULONGLONG                           g_flagLastTick = 0;
 bool                                g_flagBackedUp = false;
 
+// A guest's own world after a stay in the host's (18.09, point 1: both characters were made at the
+// crones' in the host's world, and at home the crones asked the guest for its name again -- and the
+// name would not take). While a guest is in the host's world its flag table is the host's copy:
+// what happens there, the character creation among it, is gone once the guest's own table comes
+// back. The last settled table seen in the host's world is kept, and once the guest's own table has
+// settled at home every bit set there and missing here is set here too -- what the host hands a
+// joining guest anyway, only at the moment it matters (ini flags_carry_home).
+std::atomic<bool>                        g_carryHomeOn{ true };
+std::map<uint32_t, std::vector<uint8_t>> g_hostWorldFlags;
+bool                                     g_carryHomePending = false;
+
 // Fold a value into the baseline so the next diff does not report it as ours.
 void AbsorbIntoBaseline(uint32_t Id, bool Value) {
     const uint32_t Group = Id / 10000;
@@ -956,6 +967,48 @@ void FlagSyncTick() {
                          Group);
             }
             Current[Group] = g_flagBaseline[Group];
+        }
+    }
+
+    // The host's world, carried home (see g_hostWorldFlags).
+    if (g_carryHomeOn.load()) {
+        const int Join = ReadJoinCtrlState();
+        if (Join == 7) {
+            if (!Settling) {
+                g_hostWorldFlags = Current;
+                g_carryHomePending = true;
+            }
+        } else if (Join < 0 && !Settling && g_carryHomePending) {
+            constexpr size_t kCarryPerPass = 400;
+            size_t Written = 0, Missing = 0, Groups = 0;
+            for (const auto& G : g_hostWorldFlags) {
+                auto Home = Current.find(G.first);
+                if (Home == Current.end() || Home->second.size() != G.second.size()) continue;
+                ++Groups;
+                for (size_t I = 0; I < G.second.size(); ++I) {
+                    const uint8_t Absent = static_cast<uint8_t>(G.second[I] & ~Home->second[I]);
+                    if (!Absent) continue;
+                    for (int Bit = 0; Bit < 8; ++Bit) {
+                        if (!(Absent & (1 << Bit))) continue;
+                        ++Missing;
+                        if (Written >= kCarryPerPass) continue;
+                        const uint32_t Id = G.first * 10000 + static_cast<uint32_t>(I) * 8 + (7 - Bit);
+                        WriteFlagQuiet(Id, true);
+                        Home->second[I] |= static_cast<uint8_t>(1 << Bit);
+                        AbsorbIntoBaseline(Id, true);
+                        ++Written;
+                    }
+                }
+            }
+            if (Missing <= Written) {
+                g_carryHomePending = false;
+                g_hostWorldFlags.clear();
+            }
+            if (Missing) {
+                LOG_INFO("[FLAGSYNC] back in my own world: %zu flag(s) set in the host's world and missing here "
+                         "written here too (%zu groups compared)%s", Written, Groups,
+                         Missing > Written ? " -- more next pass" : "");
+            }
         }
     }
 
@@ -3488,7 +3541,11 @@ bool PlayerSync::Initialize() {
         DS2Coop::Sync::InstallEnemyReconcile(Cfg.enemy_dead_reconcile, Cfg.kill_counts_reconcile);
         DS2Coop::Sync::InstallBossDown(Cfg.boss_while_down);
         DS2Coop::Sync::SetJoinSlotConfirm(Cfg.join_slot_confirm);
-        DS2Coop::Sync::SetGuestEventScriptsOwner(Cfg.guest_event_scripts_owner);
+        DS2Coop::Sync::SetGuestLiftFix(Cfg.guest_lift_fix);
+        DS2Coop::Sync::SetArrivalFollowHost(Cfg.arrival_follow_host);
+        DS2Coop::Sync::SetTravelPoseFix(Cfg.travel_pose_fix);
+        DS2Coop::Sync::SetRestReplayFull(Cfg.rest_replay_full);
+        DS2Coop::Sync::SetFlagsCarryHome(Cfg.flags_carry_home);
         DS2Coop::Sync::SetGuestNpcHitsIgnored(Cfg.guest_npc_hits_ignored);
         DS2Coop::Sync::SetChestLidsReconcile(Cfg.chest_lids_reconcile);
         DS2Coop::Sync::InstallBossArena(Cfg.boss_guest_starts);
@@ -3699,6 +3756,10 @@ namespace DS2Coop::Sync {
 
 void SetGuestKillCounts(bool On) {
     g_guestKillCounts.store(On);
+}
+
+void SetFlagsCarryHome(bool On) {
+    g_carryHomeOn.store(On);
 }
 
 // The local player's world position, for code outside this file.

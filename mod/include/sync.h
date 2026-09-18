@@ -202,7 +202,7 @@ void GuestWorldTick();   // game thread: probe, the applied states counted again
 // Map event scripts asking "someone else's multiplayer world?" (ESD 130602) get the game's answer
 // for a guest; true answers them "no" like the talk scripts, as up to 0.2.1 (ini
 // guest_event_scripts_owner).
-void SetGuestEventScriptsOwner(bool on);
+void SetGuestLiftFix(bool on);
 // A guest's hits on the host's world's characters do not count towards their anger, so an NPC hit
 // a few times still talks (npc_progress.cpp, ini guest_npc_hits_ignored).
 void SetGuestNpcHitsIgnored(bool on);
@@ -234,6 +234,20 @@ void StopFarSpectate(const char* why);
 bool FarSpectating();
 bool PartnerAliveReported();               // the partner's own PlayerDeath / PlayerRespawn
 bool GuestHeldForBattle(int32_t battle);   // a guest's return is held for this battle
+// A bonfire the partner lit where both players are: this player's respawn too (death_sync.cpp).
+void NotePartnerLitForRespawn(int32_t bonfireId, int32_t rawMap);   // game thread
+// A join's arrival in a map the host has already left lands where the host stands (ini
+// arrival_follow_host).
+void SetArrivalFollowHost(bool on);
+// The partner's copy left in the bonfire travel pose after its travel is put back to standing
+// (travel_sync.cpp, ini travel_pose_fix).
+void NotePartnerTravelForPose();   // any thread
+void SetTravelPoseFix(bool on);
+// The partner's rest replayed here without the event and flag reset (world_sync.cpp, ini
+// rest_replay_full); the host world's flags carried into a guest's own world (player_sync.cpp,
+// ini flags_carry_home).
+void SetRestReplayFull(bool on);
+void SetFlagsCarryHome(bool on);
 // Chests the host has open, opened for a guest in every map it loads (chest_lids.cpp, docs
 // §3.47); what lies in them follows the guest's own save (loot_sync.cpp).
 void SetChestLidsReconcile(bool on);

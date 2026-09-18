@@ -240,6 +240,7 @@ void BonfireLitGameTick() {
                  R.View, R.Loaded ? "loaded" : "not loaded", R.OwnSaved ? "my save too" : "not my save",
                  (!R.Known || (R.View == 0 && !Share)) ? "; sharing off or unknown -- only told" : "");
         if (!R.Known) continue;
+        NotePartnerLitForRespawn(L.Id, L.Map);   // death_sync.cpp: my respawn follows it where we both are
         const std::string Label = BonfireLabel(L.Id);
         UI::Overlay::GetInstance().ShowNotification(
             UI::Format(UI::Tr("%s lit the bonfire %s", "%s зажёг костёр %s"), L.From, Label.c_str()),

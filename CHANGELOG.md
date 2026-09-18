@@ -8,10 +8,29 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 
 ## 0.2.2 — not released yet / ещё не выпущено
 
-Fixes for the two reports of 17.09 and the answers to the 0.2.1 checklist. **None of it has been checked in play
-yet**; this section is rewritten from the test's results before the release.
-Исправления по двум отчётам 17.09 и ответам на чек-лист 0.2.1. **В игре пока ничего не проверено**; перед релизом
-раздел переписывается по итогам теста.
+Fixes for the two reports of 17.09 and the answers to the 0.2.1 checklist. Part of it was checked in play on 18.09
+(below); this section is rewritten from the final test's results before the release.
+Исправления по двум отчётам 17.09 и ответам на чек-лист 0.2.1. Часть проверена в игре 18.09 (ниже); перед релизом
+раздел переписывается по итогам финального теста.
+
+**Checked in play on 18.09 / Проверено в игре 18.09**
+
+- A new game started together: joined before the characters existed, walked to the Fire Keepers' Dwelling and each
+  made a character there, in one world, without crashes.
+  Новая игра вместе: вход ещё до создания персонажей, дошли до Жилища Хранительниц Огня и каждый создал своего
+  персонажа там, в одном мире, без вылетов.
+- Enemies the host killed stay dead for a guest who joins after that, and after a rejoin too.
+  Мобы, убитые хостом, мертвы у зашедшего после этого гостя, и после перезахода тоже.
+- A chest the host opened before the guest came has the guest's item in it (never opened by the guest at home).
+  В сундуке, который хост открыл до прихода гостя, у гостя лежит его предмет (если гость у себя его не открывал).
+- Friendly fire: no lock-on on each other, damage lands, lock-on on enemies works.
+  «Огонь по своим»: навестись друг на друга нельзя, урон проходит, на мобов наводиться можно.
+- The host dying in another area than the guest: the host's camera does not hang, the guest is sent home and back.
+  Хост погиб в другой локации, чем гость: камера хоста не висит, гостя отправляет домой и возвращает.
+- Notices where the partner travelled and which bonfire the partner lit (lit for the other player too); the Back
+  button in the lobby menus is visible; a guest is brought back after a death.
+  Уведомления, куда переместился напарник и какой костёр зажёг (у второго он тоже зажжён); кнопка «Назад» в меню
+  лобби заметная; гостя после смерти возвращает к хосту.
 
 **Changed / Изменено**
 

@@ -222,9 +222,15 @@ uint64_t __fastcall InMultiplayerDetour(void* Session) {
         uint32_t Map = 0;
         int32_t Event = 0;
         if (g_transferSolo.load() && ReadTaskKey(t_task, &Map, &Event) && IsGatedTransfer(Map, Event)) {
-            static std::atomic<uint64_t> s_lastKey{ 0 };
+            // Once per event: four of them are asked every frame in turn, and "not the last one"
+            // wrote 109 729 lines in one evening (18.09).
+            static uint64_t s_told[32] = {};
+            static uint32_t s_toldCount = 0;
             const uint64_t Key = (static_cast<uint64_t>(Map) << 32) | static_cast<uint32_t>(Event);
-            if (s_lastKey.exchange(Key) != Key) {
+            bool Told = false;
+            for (uint32_t I = 0; I < s_toldCount && !Told; ++I) Told = s_told[I] == Key;
+            if (!Told && s_toldCount < 32) s_told[s_toldCount++] = Key;
+            if (!Told) {
                 LOG_INFO("[GATES] cutscene transfer event %d of map 0x%08X asks whether this is multiplayer -- "
                          "answered no, so its prompt is offered in co-op", Event, Map);
             }

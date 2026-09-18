@@ -582,6 +582,12 @@ void __fastcall LastBonfireDetour(void* Events, const int32_t* Record) {
 // whatever any map origin says.
 constexpr uint32_t kJoinArrivalCaller = 0x2C2E48;
 constexpr float    kArrivalFarSq      = 20.0f * 20.0f;
+std::atomic<bool>  g_arrivalFollowHost{ true };   // ini arrival_follow_host
+
+int32_t AreaToRawMap(uint32_t Area) {
+    return static_cast<int32_t>(((Area / 1000000u) % 100u) << 24 | ((Area / 10000u) % 100u) << 16 |
+                                ((Area / 100u) % 100u) << 8 | (Area % 100u));
+}
 
 void CorrectArrival(const int32_t* Request, int32_t RawMap) {
     Spot Host{};
@@ -594,6 +600,23 @@ void CorrectArrival(const int32_t* Request, int32_t RawMap) {
         float* Pos = reinterpret_cast<float*>(const_cast<int32_t*>(Request) + 6);
         const float Dx = Pos[0] - Host.X, Dy = Pos[1] - Host.Y, Dz = Pos[2] - Host.Z;
         if (Area != Host.Area) {
+            // The host crossed a border between the summon and the arrival (18.09 00:12: the host
+            // stepped from Majula into 10310000 and straight back). The arrival names the map the host
+            // was in when its descriptor went out; the guest was put into 10310000 at the host's
+            // coordinates, fell through (HP 0, death type 90, six seconds after arriving) and was sent
+            // home. The host's own report is newer: the map it stands in, and where.
+            if (g_arrivalFollowHost.load() && Host.Area >= 10000000u && Host.Area < 70000000u) {
+                int32_t* Words = const_cast<int32_t*>(Request);
+                const int32_t Raw = AreaToRawMap(Host.Area);
+                LOG_WARNING("[DEATH] arrival at (%.2f, %.2f, %.2f) in map %u while the host reports map %u at "
+                            "(%.2f, %.2f, %.2f) -- the host crossed a border meanwhile; landing where it stands",
+                            Pos[0], Pos[1], Pos[2], Area, Host.Area, Host.X, Host.Y, Host.Z);
+                Words[2] = Raw;
+                Pos[0] = Host.X;
+                Pos[1] = Host.Y;
+                Pos[2] = Host.Z;
+                return;
+            }
             LOG_INFO("[DEATH] arrival at (%.2f, %.2f, %.2f) in map %u while the host reports map %u -- "
                      "not the same map, left alone", Pos[0], Pos[1], Pos[2], Area, Host.Area);
             return;
@@ -717,6 +740,22 @@ void TellPartnerITravelled(int32_t RawMap, int32_t Target, int32_t Type) {
     Packet.target = Target;
     Packet.type = Type;
     Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
+}
+
+// The host's side of "a guest is in my world": an accept controller at state 0x10.
+bool GuestFullyInSafe() {
+    uintptr_t Root = 0, Mp = 0;
+    if (!ReadPtr(ExeBase() + kNetRoot, &Root) || !ReadPtr(Root + 0x18, &Mp)) return false;
+    __try {
+        uintptr_t It  = *reinterpret_cast<const uintptr_t*>(Mp + 0x48);
+        uintptr_t End = *reinterpret_cast<const uintptr_t*>(Mp + 0x50);
+        for (int Guard = 0; It && It < End && Guard < 16; It += 8, ++Guard) {
+            const uintptr_t Ctrl = *reinterpret_cast<const uintptr_t*>(It);
+            if (Ctrl && *reinterpret_cast<const int32_t*>(Ctrl + 0x150) == 0x10) return true;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return false;
 }
 
 // A guest still on its way into the host's world: an accept controller that has
@@ -2200,6 +2239,7 @@ void NoteHostTravelled(int32_t RawMap, int32_t Bonfire) {
 }
 
 void NotePartnerTravelled(int32_t Map, int32_t Target, int32_t Type, const std::string& From) {
+    NotePartnerTravelForPose();   // travel_sync.cpp: the partner's copy here may keep the travel pose
     std::lock_guard<std::mutex> Lock(g_partnerTravelMutex);
     g_partnerTravel.Map = Map;
     g_partnerTravel.Target = Target;
@@ -2255,6 +2295,81 @@ bool IsHostInBossFight() {
 
 bool PartnerAliveReported() {
     return g_partnerAlive.load();
+}
+
+void SetArrivalFollowHost(bool On) {
+    g_arrivalFollowHost.store(On);
+}
+
+// A bonfire the partner lit where both of us are: this player's respawn too (18.09, point 3: the
+// guest lit a bonfire, the host died and woke at the map's start, never having rested there).
+// Lighting sets the lighter's last bonfire itself -- exe+0x1CAF50 -> exe+0x44FE30([GMImp+0x70],
+// {map, 0, id}), only outside a multiplayer world -- and nobody else's. The host takes the same
+// record; a guest in the host's world comes back after a death by the mod's rest spot, so that one
+// moves to the bonfire (found among the loaded ones by its id, exe+0x3BA6A0).
+bool FindBonfireByIdSafe(int32_t Id, float* Out) {
+    __try {
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+        const uintptr_t Events = *reinterpret_cast<const uintptr_t*>(Gm + 0x70);
+        const uintptr_t List = *reinterpret_cast<const uintptr_t*>(Events + 0x58);
+        uintptr_t Node = *reinterpret_cast<const uintptr_t*>(List + 0x08);
+        int Count = *reinterpret_cast<const int32_t*>(List + 0x10);
+        if (Count < 0 || Count > 512) Count = 512;
+        for (int I = 0; I < Count && Node; ++I) {
+            const uintptr_t Obj = *reinterpret_cast<const uintptr_t*>(Node + 0x08);
+            if (Obj) {
+                const int32_t* Its = reinterpret_cast<const int32_t*(__fastcall*)(uintptr_t)>(ExeBase() + 0x3BA6A0)(Obj);
+                if (Its && *Its == Id) {
+                    const float* P = reinterpret_cast<const float*>(Obj + 0x70);
+                    Out[0] = P[0];
+                    Out[1] = P[1];
+                    Out[2] = P[2];
+                    return true;
+                }
+            }
+            Node = *reinterpret_cast<const uintptr_t*>(Node + 0x60);
+        }
+        return false;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool SetLastBonfireSafe(int32_t RawMap, int32_t Id) {
+    __try {
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+        const uintptr_t Events = Gm ? *reinterpret_cast<const uintptr_t*>(Gm + 0x70) : 0;
+        if (!Events) return false;
+        const int32_t Record[3] = { RawMap, 0, Id };
+        reinterpret_cast<BonfireFn>(ExeBase() + kLastBonfire)(reinterpret_cast<void*>(Events), Record);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void NotePartnerLitForRespawn(int32_t Id, int32_t RawMap) {
+    if (!g_enabled.load() || Id <= 0) return;
+    auto& Lobby = Session::SessionManager::GetInstance();
+    if (!Lobby.IsActive()) return;
+    if (Lobby.IsHost()) {
+        int32_t Joining = 0;
+        if (!GuestFullyInSafe() || AGuestIsStillJoining(&Joining)) return;
+        const bool Done = SetLastBonfireSafe(RawMap, Id);
+        LOG_INFO("[DEATH] the guest lit bonfire %d (map %u) in my world -- it is my respawn too: %s", Id,
+                 RawMapToArea(RawMap), Done ? "done" : "threw");
+        return;
+    }
+    if (ReadJoinState() != kJoinInWorld) return;
+    float P[3] = {};
+    if (!FindBonfireByIdSafe(Id, P)) {
+        LOG_INFO("[DEATH] the host lit bonfire %d (map %u) -- not loaded here, my way back stays as it was", Id,
+                 RawMapToArea(RawMap));
+        return;
+    }
+    g_restSpot = Spot{ RawMapToArea(RawMap), P[0], P[1], P[2], true };
+    LOG_INFO("[DEATH] the host lit bonfire %d (map %u) -- after a death I come back there (%.2f, %.2f, %.2f)", Id,
+             RawMapToArea(RawMap), P[0], P[1], P[2]);
 }
 
 // Game thread: a guest whose return is held for exactly this battle (boss_down.cpp).

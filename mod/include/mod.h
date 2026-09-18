@@ -115,10 +115,19 @@ struct ModConfig {
     // where the area says no, the host crossing a border meanwhile): reserved again and let
     // through (summon_accept.cpp, docs §3.47). false: logged only.
     bool join_slot_confirm = true;
-    // Map event scripts asking "someone else's multiplayer world?" answered "no" for a guest, as
-    // for the world's owner -- up to 0.2.1 that sent the Belfry lift down the owner's branch on the
-    // guest (guest_world.cpp, docs §3.47). Talk scripts are not affected. Off.
-    bool guest_event_scripts_owner = false;
+    // The lift's init event (m10_30, 1030) gets the game's own answer to "someone else's world?" for
+    // a guest instead of "no": it no longer runs the world owner's branch on the guest. Every other
+    // event and talk script still gets "no" (guest_world.cpp, docs §3.47-3.48). On.
+    bool guest_lift_fix = true;
+    // 0.2.2 test of 18.09 (docs §3.48): a join's arrival in a map the host has already left lands
+    // where the host stands; the partner's copy stuck in the travel pose is put back; a bonfire the
+    // partner lit is this player's respawn too; the partner's rest is replayed without the event and
+    // flag reset (true: the full reset, as before); the host world's flags are carried into the
+    // guest's own world.
+    bool arrival_follow_host = true;
+    bool travel_pose_fix = true;
+    bool rest_replay_full = false;
+    bool flags_carry_home = true;
     // A guest's hits on NPCs of the host's world are not counted towards their anger: an NPC hit
     // a few times still talks to the guest (npc_progress.cpp, docs §3.47). On.
     bool guest_npc_hits_ignored = true;

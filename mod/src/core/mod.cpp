@@ -410,8 +410,16 @@ void SeamlessCoopMod::LoadConfig() {
                     m_config.boss_while_down = (value == "true" || value == "1");
                 } else if (key == "join_slot_confirm") {
                     m_config.join_slot_confirm = (value == "true" || value == "1");
-                } else if (key == "guest_event_scripts_owner") {
-                    m_config.guest_event_scripts_owner = (value == "true" || value == "1");
+                } else if (key == "guest_lift_fix") {
+                    m_config.guest_lift_fix = (value == "true" || value == "1");
+                } else if (key == "arrival_follow_host") {
+                    m_config.arrival_follow_host = (value == "true" || value == "1");
+                } else if (key == "travel_pose_fix") {
+                    m_config.travel_pose_fix = (value == "true" || value == "1");
+                } else if (key == "rest_replay_full") {
+                    m_config.rest_replay_full = (value == "true" || value == "1");
+                } else if (key == "flags_carry_home") {
+                    m_config.flags_carry_home = (value == "true" || value == "1");
                 } else if (key == "guest_npc_hits_ignored") {
                     m_config.guest_npc_hits_ignored = (value == "true" || value == "1");
                 } else if (key == "chest_lids_reconcile") {
@@ -507,7 +515,11 @@ void SeamlessCoopMod::SaveConfig() {
         configFile << "guest_kill_counts=" << (m_config.guest_kill_counts ? "true" : "false") << "\n";
         configFile << "boss_while_down=" << (m_config.boss_while_down ? "true" : "false") << "\n";
         configFile << "join_slot_confirm=" << (m_config.join_slot_confirm ? "true" : "false") << "\n";
-        configFile << "guest_event_scripts_owner=" << (m_config.guest_event_scripts_owner ? "true" : "false") << "\n";
+        configFile << "guest_lift_fix=" << (m_config.guest_lift_fix ? "true" : "false") << "\n";
+        configFile << "arrival_follow_host=" << (m_config.arrival_follow_host ? "true" : "false") << "\n";
+        configFile << "travel_pose_fix=" << (m_config.travel_pose_fix ? "true" : "false") << "\n";
+        configFile << "rest_replay_full=" << (m_config.rest_replay_full ? "true" : "false") << "\n";
+        configFile << "flags_carry_home=" << (m_config.flags_carry_home ? "true" : "false") << "\n";
         configFile << "guest_npc_hits_ignored=" << (m_config.guest_npc_hits_ignored ? "true" : "false") << "\n";
         configFile << "chest_lids_reconcile=" << (m_config.chest_lids_reconcile ? "true" : "false") << "\n";
         configFile << "boss_guest_starts=" << (m_config.boss_guest_starts ? "true" : "false") << "\n";

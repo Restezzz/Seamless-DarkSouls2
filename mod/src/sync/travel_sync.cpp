@@ -663,13 +663,73 @@ PoseNumbers ReadPoseSafe(uintptr_t Chr) {
 
 std::atomic<ULONGLONG> g_poseWatchUntil{ 0 };
 constexpr ULONGLONG kPoseWatchMs = 20000;
+
+// The fix (18.09, point 5: after the guest travelled, the host saw it frozen in the bonfire travel
+// pose, and in PvP could not hit it). The copy's action controller keeps kind 0x14 from the travel
+// start, and the partner's new character, idle from the start, never sends a transition that would
+// end it. So once the partner has travelled and its copy here is still in kind 0x14 eight seconds
+// later -- a travel is over in three, and a warp takes the character away -- the copy is put back
+// the way the travel start set it: kind 0, the travel bit 0x4000000 of +0xFC cleared (ini
+// travel_pose_fix).
+std::atomic<bool>      g_poseFix{ true };
+std::atomic<ULONGLONG> g_partnerTravelAt{ 0 };
+constexpr ULONGLONG    kPoseStuckMs = 8000;
+constexpr ULONGLONG    kPoseGiveUpMs = 60000;
+constexpr int32_t      kTravelKind = 0x14;
+
+bool ClearTravelPoseSafe(uintptr_t Chr, int32_t* KindBefore) {
+    *KindBefore = -1;
+    __try {
+        const uintptr_t Action = *reinterpret_cast<const uintptr_t*>(Chr + 0xC8);
+        if (!Action) return false;
+        *KindBefore = *reinterpret_cast<const int32_t*>(Action + 0xF0);
+        if (*KindBefore != kTravelKind) return false;
+        *reinterpret_cast<int32_t*>(Action + 0xF0) = 0;
+        *reinterpret_cast<uint32_t*>(Action + 0xFC) &= ~0x4000000u;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void PoseFixTick() {
+    const ULONGLONG At = g_partnerTravelAt.load();
+    if (!At || !g_poseFix.load()) return;
+    const ULONGLONG Now = GetTickCount64();
+    if (Now - At < kPoseStuckMs) return;
+    if (Now - At > kPoseGiveUpMs) {
+        g_partnerTravelAt.store(0);
+        return;
+    }
+    const uintptr_t Partner = GetPartnerCharacter(1000);
+    if (!Partner || !IsSessionPlayer(Partner)) return;
+    int32_t Before = -1;
+    if (!ClearTravelPoseSafe(Partner, &Before)) {
+        if (Before >= 0 && Before != kTravelKind) g_partnerTravelAt.store(0);   // it moved on by itself
+        return;
+    }
+    g_partnerTravelAt.store(0);
+    WatchPoses();
+    LOG_INFO("[POSE] the partner's copy was still in the bonfire travel pose %llu s after its travel -- put back "
+             "to standing", static_cast<unsigned long long>((Now - At) / 1000));
+}
 } // namespace
 
 void WatchPoses() {
     g_poseWatchUntil.store(GetTickCount64() + kPoseWatchMs);
 }
 
+void NotePartnerTravelForPose() {
+    g_partnerTravelAt.store(GetTickCount64());
+    WatchPoses();
+}
+
+void SetTravelPoseFix(bool On) {
+    g_poseFix.store(On);
+}
+
 void PoseProbeTick() {
+    PoseFixTick();
     const ULONGLONG Now = GetTickCount64();
     if (Now > g_poseWatchUntil.load()) return;
     static ULONGLONG s_at = 0;

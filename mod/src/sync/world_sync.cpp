@@ -154,10 +154,32 @@ void __fastcall RestResetDetour(void* A, void* B, void* C, void* D) {
         3.5f, UI::NotifyKind::Player);
 }
 
+// The partner's rest replayed here (18.09, point 4: the guest rested in Majula and the Emerald
+// Herald was gone for the host until the host rested itself). exe+0x17FD70 is three steps:
+// exe+0x417210([GMImp+0x40]) -- every generator's character taken away and made again (the enemies
+// back); exe+0x3C1B50() -- the map's objects (barrels and boxes); and a tail jump to
+// exe+0x44F880([GMImp+0x70]) -- the flags whose (id/10000)%100 is 2 zeroed and every event task's
+// script destroyed. The last one is what a replay must not do: an NPC whose generator waits for its
+// event task comes back only once that task runs again, and some of them run again only after a real
+// rest -- in the host's log group 10402 read empty right after each replay (21:53:18, 21:58:02) and
+// 104020149 came back only after the host's own rest (21:54:22). So a replay takes the first two
+// steps; the full reset stays behind ini rest_replay_full.
+std::atomic<bool> g_replayFull{ false };
+constexpr uint32_t kGenResetAll  = 0x417210;   // (generator manager)
+constexpr uint32_t kObjResetAll  = 0x3C1B50;   // ()
+
 // No C++ objects in here: the replay runs under SEH.
 bool ReplayResetSafely() {
     __try {
-        g_restReset(nullptr, nullptr, nullptr, nullptr);
+        if (g_replayFull.load()) {
+            g_restReset(nullptr, nullptr, nullptr, nullptr);
+            return true;
+        }
+        const uintptr_t Base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(Base + 0x16148F0);
+        const uintptr_t GenMgr = Gm ? *reinterpret_cast<const uintptr_t*>(Gm + 0x40) : 0;
+        if (GenMgr) reinterpret_cast<void(__fastcall*)(uintptr_t)>(Base + kGenResetAll)(GenMgr);
+        reinterpret_cast<void(__fastcall*)()>(Base + kObjResetAll)();
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -219,6 +241,10 @@ bool Hook(uint32_t Rva, void* Detour, void** Original, const char* What) {
 }
 
 } // namespace
+
+void SetRestReplayFull(bool On) {
+    g_replayFull.store(On);
+}
 
 bool InstallWorldSync() {
     if (g_installed.exchange(true)) return g_restReset && g_genUpdate;

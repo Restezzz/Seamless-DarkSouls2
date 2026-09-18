@@ -252,6 +252,22 @@ void __fastcall FlagSetDetour(void* Flags, uint32_t Id, char Value) {
         g_flagSetOriginal(Flags, Id, Value);
         return;
     }
+    if (Ret == kTalkFlagReturn && Flags && !TalkOpen() && GuestInHostWorld()) {
+        // Probe (18.09, point 6: a lever the guest pulled opened the doors at the host's only): the
+        // map events' writes the game drops for a guest, once per flag.
+        bool Ok = false;
+        if (!GuestMaySafe(Id, &Ok) && Ok) {
+            static uint32_t s_told[128] = {};
+            static uint32_t s_toldCount = 0;
+            bool Told = false;
+            for (uint32_t I = 0; I < s_toldCount && !Told; ++I) Told = s_told[I] == Id;
+            if (!Told && s_toldCount < 128) {
+                s_told[s_toldCount++] = Id;
+                LOG_INFO("[FLAGS] an event of the host's world set flag %u = %d here, as a guest -- the game drops "
+                         "it (probe)", Id, Value ? 1 : 0);
+            }
+        }
+    }
     if ((Ret != kTalkFlagReturn && Ret != kChrTalkFlagReturn) || !g_enabled.load(std::memory_order_relaxed) ||
         !Flags || !TalkOpen() || !GuestInHostWorld()) {
         g_flagSetOriginal(Flags, Id, Value);

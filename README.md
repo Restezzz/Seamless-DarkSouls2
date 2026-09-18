@@ -28,7 +28,9 @@ Co-op for Dark Souls II in the spirit of the Seamless Co-op mods for Elden Ring 
 One player — the **host** — runs a small server on their PC. Friends connect to it over
 **Radmin VPN**, join the host's lobby from an in-game menu and get summoned into the host's
 world by themselves. Then you play together, and the co-op does not fall apart after every
-boss, death or area.
+boss, death or area. You can even start a brand-new game together: join before your characters
+exist, walk to the Fire Keepers' Dwelling side by side, and each of you makes a character there,
+in one world.
 
 Everything goes through your own server, so the game never talks to the official servers:
 no invasions, no strangers.
@@ -44,7 +46,9 @@ It is an early version, played by two people so far. See **Known issues** below.
 Один игрок — **хост** — запускает у себя маленький сервер. Друзья подключаются к нему через
 **Radmin VPN**, заходят в лобби хоста из меню прямо в игре, и их сам призывает в мир
 хоста. Дальше играете вместе, и кооп не разваливается после каждого босса, смерти или
-перехода между локациями.
+перехода между локациями. Можно даже начать новую игру вместе: зайти друг к другу ещё до
+создания персонажей, вместе дойти до Жилища Хранительниц Огня и там каждому создать своего
+персонажа — в одном мире.
 
 Всё идёт через свой сервер, игра не ходит на официальные серверы: никаких вторжений и
 случайных людей.
@@ -86,6 +90,9 @@ It is an early version, played by two people so far. See **Known issues** below.
     dump file for the bug report.
 12. **One-click server for the host.** `StartServer.bat` finds the Radmin address, starts
     the server and prepares the key file for friends.
+13. **Start a new game together.** Join from the very first minute, before either character
+    exists: go to the Fire Keepers' Dwelling together and each of you creates your own
+    character — name, class, looks — in the same world.
 
 </td>
 <td valign="top">
@@ -116,6 +123,9 @@ It is an early version, played by two people so far. See **Known issues** below.
     файл дампа для отчёта.
 12. **Сервер в один клик.** `StartServer.bat` сам находит адрес Radmin, запускает сервер и
     готовит файл-ключ для друзей.
+13. **Новая игра вместе.** Заходите друг к другу с первой минуты, ещё до создания персонажей:
+    вместе идёте в Жилище Хранительниц Огня, и каждый создаёт своего персонажа — имя, класс,
+    внешность — в одном мире.
 
 </td>
 </tr>

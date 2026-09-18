@@ -115,7 +115,7 @@ std::atomic<bool>      g_talkScripts{ true };      // ini guest_npc_talk_scripts
 std::atomic<bool>      g_npcLocal{ true };         // ini guest_npc_local
 std::atomic<bool>      g_waitSnapshot{ true };     // ini guest_wait_for_snapshot
 std::atomic<bool>      g_liveStates{ true };       // ini enemy_states_at_join
-std::atomic<bool>      g_eventScriptsOwner{ false };   // ini guest_event_scripts_owner
+std::atomic<bool>      g_liftFix{ true };              // ini guest_lift_fix
 
 // The host's live states, kept until the join map's block exists.
 struct LiveStash {
@@ -217,11 +217,31 @@ uint64_t __fastcall AreaEventsRunDetour(void* Area) {
 // An event script, not a talk, asked ESD function 130602 (0.2.2, the lift, report point 2). The
 // dispatcher exe+0x45C6A0 serves the map event scripts as well as the talk scripts, so answering
 // "no" at exe+0x45DD67 for a guest also sent every map event that asks it down the world owner's
-// branch -- the Belfry lift's init event 1030 (m10_30) among them: `IF (f130602() != 1)` ->
-// sub-machine 0x7FFFFFF3, "set the cabin (10302000) to state 40", then flag 130000001. On 17.09 the
-// guest's log shows that flag at 14:31:29, the second the mod let the guest's events of that map
-// run, and it went on into the host's save. For an event script the game's own answer stands
-// (ini guest_event_scripts_owner=false); talk scripts still get "no". Logged once per event.
+// branch -- the lift's init event 1030 (m10_30) among them: `IF (f130602() != 1)` -> sub-machine
+// 0x7FFFFFF3, "set the cabin (10302000) to state 40", then flag 130000001. On 17.09 the guest's log
+// shows that flag at 14:31:29, the second the mod let the guest's events of that map run.
+//
+// The first 0.2.2 test (18.09) kept the game's answer for every event script -- and the NPC events
+// ask it too: 111040-111343 in Majula, 111100-111153 at the crones' in Things Betwixt, 111243-111294
+// in the Forest ("the game's answer 1 kept"), and the guest had no "Talk" in Majula nor the
+// hatchlings in the nest. So only the lift's own event gets the game's answer; every other event
+// script gets "no", as up to 0.2.1 (ini guest_lift_fix).
+struct OwnAnswerEvent {
+    uint32_t Map;
+    int32_t  Event;
+};
+constexpr OwnAnswerEvent kOwnAnswerEvents[] = {
+    { 0x0A1E0000u, 1030 },   // m10_30: the lift's init (cabin 10302000 to state 40, flag 130000001)
+};
+
+bool OwnAnswerEventFor(uintptr_t Task, uint32_t* MapOut, int32_t* EventOut) {
+    if (!ReadEventTaskKey(Task, MapOut, EventOut)) return false;
+    for (const OwnAnswerEvent& E : kOwnAnswerEvents) {
+        if (E.Map == *MapOut && E.Event == *EventOut) return true;
+    }
+    return false;
+}
+
 void NoteEventAsked130602(uintptr_t Task, uint64_t Stock) {
     static uint64_t s_seen[256];
     static uint32_t s_count = 0;
@@ -245,9 +265,11 @@ uint64_t __fastcall MpPlayersWarpDetour(void* Session) {
     const bool Esd  = Ret == kEsdMpReturn && g_talkScripts.load();
     const bool Kind = Ret == kNpcKindReturn && g_npcLocal.load();
     if ((!Esd && !Kind) || !GuestInALobby()) return Stock;
-    if (Esd && !g_eventScriptsOwner.load()) {
+    if (Esd && g_liftFix.load()) {
         const uintptr_t Task = CurrentEventTask();
-        if (Task) {
+        uint32_t Map = 0;
+        int32_t Event = 0;
+        if (Task && OwnAnswerEventFor(Task, &Map, &Event)) {
             NoteEventAsked130602(Task, Stock);
             return Stock;
         }
@@ -458,8 +480,8 @@ bool InstallGuestWorld(bool TalkScripts, bool NpcLocal, bool WaitSnapshot, bool 
     return g_mpPlayersWarp != nullptr && g_genCreate != nullptr;
 }
 
-void SetGuestEventScriptsOwner(bool On) {
-    g_eventScriptsOwner.store(On);
+void SetGuestLiftFix(bool On) {
+    g_liftFix.store(On);
 }
 
 // Game thread: the records the host's states were applied to, counted again a few
