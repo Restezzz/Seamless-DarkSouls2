@@ -436,6 +436,13 @@ bool IsTalkOpenNearby() {
     return TalkOpenNearbySafe(&Distance);
 }
 
+// The partner's copy is about to be destroyed and made again (travel_sync.cpp): the pointer kept here
+// would outlive it.
+void ForgetPartnerCharacter() {
+    g_partnerChrAt.store(0);
+    g_partnerChr.store(0);
+}
+
 uintptr_t GetPartnerCharacter(uint64_t maxAgeMs) {
     const unsigned long long Seen = g_partnerChrAt.load();
     if (!Seen) return 0;

@@ -336,6 +336,25 @@ bool DoorStateIsNew(uintptr_t Door, uint8_t State) {
     return true;
 }
 
+// Probe (19.09, a flat white wall with no prompt on the way from Majula into the Forest): where a door
+// stands -- its map object's position, [[door+8]+0x70], as for bonfires -- and where I stand
+// ([GMImp+0xD0]+0x90), so the next log says which door a wall was.
+bool ReadDoorAndMeSafe(uintptr_t Door, float* At, float* Me) {
+    __try {
+        const uintptr_t Obj = *reinterpret_cast<const uintptr_t*>(Door + 0x08);
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+        const uintptr_t Player = Gm ? *reinterpret_cast<const uintptr_t*>(Gm + 0xD0) : 0;
+        if (!Obj || !Player) return false;
+        for (int I = 0; I < 3; ++I) {
+            At[I] = *reinterpret_cast<const float*>(Obj + 0x70 + I * 4);
+            Me[I] = *reinterpret_cast<const float*>(Player + 0x90 + I * 4);
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 void NoteDoor(uintptr_t Door, uint8_t State) {
     // A plain door (kind 0) standing open is nothing worth a line, and there are many of
     // them: on 17.09 their lines crowded out the door slots and came back 7000 times a
@@ -344,9 +363,15 @@ void NoteDoor(uintptr_t Door, uint8_t State) {
     if (State == 0 && ReadDoor(Door, &Info) && Info.Kind == 0) return;
     if (!DoorStateIsNew(Door, State)) return;
     if (!ReadDoor(Door, &Info)) return;
+    float At[3] = {}, Me[3] = {};
+    const bool Where = ReadDoorAndMeSafe(Door, At, Me);
     LOG_INFO("[TRAVEL] door %p: kind %u, stored role %d, session role %d, flag %u -> state %u (%s)",
              reinterpret_cast<void*>(Door), Info.Kind, Info.StoredRole, ReadSessionRole(),
              Info.Flag, State, DoorStateName(State));
+    if (Where) {
+        LOG_INFO("[TRAVEL]   that door's object at (%.1f, %.1f, %.1f), I stand at (%.1f, %.1f, %.1f)",
+                 At[0], At[1], At[2], Me[0], Me[1], Me[2]);
+    }
 }
 
 // In the host's world: the join controller ([[netRoot+0x18]+0x40],

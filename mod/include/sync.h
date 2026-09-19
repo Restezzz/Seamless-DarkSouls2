@@ -257,6 +257,13 @@ void CarryHostWorldFlagsHomeNow(const char* why);
 // mp_gates.cpp: the event manager's hold counter (+0x1B4) and the byte it drives, logged as they
 // change (19.09 probe: the host's black screen after making its character).
 void EventViewProbeTick();
+// The partner's copy made again from its new look (partner_look.cpp, travel_sync.cpp, docs §3.51).
+void PartnerLookTick();                                        // game thread: my own look, sent when new
+void SetPartnerLookRefresh(bool on);
+void SetPartnerLookSwap(bool on);
+void NotePartnerLook(const uint8_t* look, uint32_t seq);       // network thread: record +0x00..+0x2DB
+void ForgetPartnerCharacter();                                 // npc_talk.cpp: the kept pointer, gone with the copy
+void ForgetPartnerCopy();                                      // pvp_modes.cpp: the team written on the old copy
 // Chests the host has open, opened for a guest in every map it loads (chest_lids.cpp, docs
 // §3.47); what lies in them follows the guest's own save (loot_sync.cpp).
 void SetChestLidsReconcile(bool on);
@@ -395,6 +402,9 @@ public:
     // This player's own name only ([[GMImp+0xA8]+0x114]), "" while the character is not made yet --
     // never someone else's name from the session (loot_sync.cpp keys its records by it).
     std::string GetOwnCharacterName();
+    // The name and the save slot, "name#slot" (the slot unreadable: the name alone) -- what loot_sync.cpp
+    // keys its records by, so two characters of one name in two slots never share them.
+    std::string GetOwnCharacterKey();
 
 private:
     PlayerSync() = default;

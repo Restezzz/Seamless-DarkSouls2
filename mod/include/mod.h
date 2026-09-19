@@ -135,6 +135,10 @@ struct ModConfig {
     // (the game drops it): the Emerald Herald's "gave the flask", NPC dialogue that goes on after the
     // first line (npc_progress.cpp, docs §3.50). On.
     bool npc_events_after_talk = true;
+    // Each player's own look (name, face, attributes) goes to the partner when it changes -- the
+    // character was just made -- and the partner's copy here is made again from it, without a new
+    // summon: name over the HP bar, face, the HP bar's max (partner_look.cpp, docs §3.51). On.
+    bool partner_look_refresh = true;
     // Chests the host has open are opened for a guest in every map it loads -- old chests the host
     // opened long ago could not be opened by the guest at all (chest_lids.cpp, docs §3.47). On.
     bool chest_lids_reconcile = true;

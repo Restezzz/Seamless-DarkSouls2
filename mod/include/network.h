@@ -100,6 +100,9 @@ enum class PacketType : uint8_t {
     // The host's open chests of one map (chest_lids.cpp): a chest open at the host's is opened
     // for the guest too, its contents by the guest's own save.
     ChestLids = 0x47,
+    // The sender's own character as the game builds it for a summon, record +0x00..+0x2DB
+    // (partner_look.cpp): the copy on the other side is made again when its look changed.
+    PartnerLook = 0x48,
 
     // Custom data
     ChatMessage = 0x40,
@@ -246,6 +249,12 @@ struct ChestLidsPacket {
     uint8_t       source;    // 0 loaded on the host, 1 the host's save record
     uint8_t       reserved;
     ChestLidEntry entries[200];
+};
+
+struct PartnerLookPacket {
+    PacketHeader header;
+    uint32_t     seq;              // the sender's look number; the same number is the same look
+    uint8_t      record[0x2DC];    // exe+0x51BA70's record, +0x00..+0x2DB
 };
 
 struct PlayerTravelledPacket {

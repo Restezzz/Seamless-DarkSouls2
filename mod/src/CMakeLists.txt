@@ -31,6 +31,7 @@ add_library(ds2_seamless_coop SHARED
     sync/boss_arena.cpp
     sync/death_camera.cpp
     sync/travel_sync.cpp
+    sync/partner_look.cpp
     sync/mp_gates.cpp
     sync/guest_drops.cpp
     utils/logger.cpp

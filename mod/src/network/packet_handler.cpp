@@ -93,6 +93,13 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
             }
             break;
 
+        case PacketType::PartnerLook:
+            if (packet->size >= sizeof(PartnerLookPacket)) {
+                const auto* Look = reinterpret_cast<const PartnerLookPacket*>(packet);
+                DS2Coop::Sync::NotePartnerLook(Look->record, Look->seq);
+            }
+            break;
+
         case PacketType::ChestLids:
             if (packet->size >= sizeof(ChestLidsPacket)) {
                 const auto* Lids = reinterpret_cast<const ChestLidsPacket*>(packet);

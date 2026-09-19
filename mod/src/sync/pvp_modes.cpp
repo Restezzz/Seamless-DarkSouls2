@@ -481,6 +481,12 @@ void ProbeTick();
 
 } // namespace
 
+// The partner's copy is about to be destroyed and made again (travel_sync.cpp): what was written on it is
+// forgotten, never put back -- the old object may be freed by then. The next tick writes the new copy.
+void ForgetPartnerCopy() {
+    g_partnerWrite = PartnerWrite{};
+}
+
 void SetDamageMode(uint8_t Mode) {
     if (Mode > kDamagePvp) Mode = kDamageNone;
     if (g_chosenMode.exchange(Mode) != Mode) {

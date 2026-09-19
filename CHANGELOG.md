@@ -73,6 +73,11 @@ Fixes for the two reports of 17.09 and the answers to the 0.2.1 checklist. Part 
   «напарник встал»); новый персонаж не наследует записи сундуков и подобранного из прошлой игры под тем же именем;
   флаги мира хоста попадают в мир гостя до запуска скриптов карты (старушки дома не предлагают создание снова, дар не
   выдаётся дважды); мобы после отдыха гостя не встают трупами; Хранительница Огня говорит с гостем дальше первых фраз.
+- After a character is made, the partner sees its name over the HP bar, its face and its real HP bar without a new
+  summon: the partner's copy is made again from the new look. The chest and pickup records are kept per character
+  name and save slot.
+  После создания персонажа напарник видит его ник над полоской, внешность и настоящую полоску хп без нового призыва:
+  копия напарника делается заново по новому облику. Записи сундуков и подобранного ведутся по имени и слоту сохранения.
 
 Both players need 0.2.2: three new packets between the players.
 Нужна 0.2.2 у обоих: три новых пакета между игроками.

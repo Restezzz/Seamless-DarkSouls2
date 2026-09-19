@@ -92,6 +92,11 @@ namespace {
 constexpr uint32_t  kNetRoot          = 0x1616CF8;
 constexpr uint32_t  kGameManagerImp   = 0x16148F0;
 constexpr uint32_t  kQueuePlayer      = 0x51B0E0;   // (player list, peer id*, record*, flag) -> queued
+constexpr uint32_t  kListTick         = 0x51C940;   // (player list, dt): its first call runs the queue (exe+0x51DBB0)
+constexpr uint32_t  kDestroySlot      = 0x51D2A0;   // (player list, slot): the slot's character destroyed, slot freed
+constexpr uint32_t  kLookBytes        = 0x2DC;      // record +0x00..+0x2DB, what a look carries
+constexpr ULONGLONG kLookGapMs        = 15000;      // one copy made again per this long at most
+constexpr ULONGLONG kLookKeepMs       = 120000;     // a look waits this long for a quiet moment
 constexpr uint32_t  kFindById         = 0x51D4B0;   // (player list, peer id*) -> the character slot, or 0
 constexpr uint32_t  kPeerIdCtor       = 0xA3DA40;   // (peer id)
 constexpr uint32_t  kPeerIdCopy       = 0xA3DBD0;   // (peer id, source peer id*)
@@ -268,6 +273,18 @@ bool CopyRecordSafe(void* Id, void* Record) {
     }
 }
 
+// The partner's look (partner_look.cpp): pending until the player-list tick puts it on.
+using ListTickFn = void(__fastcall*)(void* List, float Dt);
+ListTickFn             g_listTickOriginal = nullptr;
+std::atomic<bool>      g_lookSwap{ true };      // ini partner_look_refresh
+std::atomic<bool>      g_lookPending{ false };
+std::mutex             g_lookMutex;
+alignas(16) uint8_t    g_look[kLookBytes] = {};
+uint32_t               g_lookSeq = 0;
+uint32_t               g_lookDoneSeq = 0;       // the last look handled; a resend of it is nothing new
+ULONGLONG              g_lookAt = 0;
+ULONGLONG              g_lookSwappedAt = 0;
+
 uint64_t __fastcall QueuePlayerDetour(void* List, void* Id, void* Record, uint8_t Flag) {
     const uint64_t Queued = g_queueOriginal(List, Id, Record, Flag);
     if ((Queued & 0xFF) && !t_queueingOurselves && Id && Record &&
@@ -275,6 +292,10 @@ uint64_t __fastcall QueuePlayerDetour(void* List, void* Id, void* Record, uint8_
         std::lock_guard<std::mutex> Lock(g_recordMutex);
         g_haveRecord = CopyRecordSafe(Id, Record);
         g_recordAt = GetTickCount64();
+        {
+            std::lock_guard<std::mutex> LookLock(g_lookMutex);
+            g_lookDoneSeq = 0;   // a new summon: the partner's looks are counted afresh
+        }
         LOG_INFO("[TRAVEL] the game queued the partner's character -- its record is kept for after a travel (%s)",
                  g_haveRecord ? "copied" : "copy failed");
     }
@@ -338,6 +359,166 @@ bool QueueRecordSafe(uintptr_t List, uint64_t* Result) {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
     }
+}
+
+// --- the partner's copy made again from its new look (partner_look.cpp, docs 3.51) -----------------------
+// Things a look changes on the copy: name, face, attributes (its max HP), hollowing.
+bool LookDiffers(const uint8_t* Look, const uint8_t* Kept) {
+    return std::memcmp(Look + 0x29C, Kept + 0x29C, 0x40) != 0 || std::memcmp(Look + 0x18C, Kept + 0x18C, 0xA2) != 0 ||
+           std::memcmp(Look + 0x250, Kept + 0x250, 11) != 0 || Look[0x230] != Kept[0x230];
+}
+
+// The kept record with the look's parts: where it stands and how, equipment and face, hollowing,
+// covenant and attributes, HP and name. The summon's own parts stay: the session words (+0x40..+0x5B),
+// the short id (+0x22E), the id string and timers (+0x25B..+0x277), +0x294 -- and no effects.
+void MergeLook(uint8_t* Merged, const uint8_t* Look) {
+    std::memcpy(Merged, Look, 0x40);
+    std::memcpy(Merged + 0x5C, Look + 0x5C, 0x22E - 0x5C);
+    std::memcpy(Merged + 0x230, Look + 0x230, 0x25B - 0x230);
+    std::memcpy(Merged + 0x278, Look + 0x278, 0x294 - 0x278);
+    std::memcpy(Merged + 0x298, Look + 0x298, 0x2DC - 0x298);
+    *reinterpret_cast<uint32_t*>(Merged + 0x5E0) = 0;
+}
+
+struct LookSwap {
+    uint16_t ShortId   = 0;
+    int32_t  Hp        = 0;
+    bool     Found     = false;
+    bool     Destroyed = false;
+    uint64_t Queued    = 0;
+};
+
+// Destroy the copy and queue it again with the new record, inside the player-list tick: the tick's own
+// first call (exe+0x51DBB0) makes the new copy at once, and the multiplayer manager's tick, which runs
+// before this one, never sees the partner missing. exe+0x51CE20 does not check for a character already
+// in the slot, so the old one goes first.
+bool SwapPartnerSafe(uintptr_t List, uint8_t* Merged, LookSwap* S) {
+    __try {
+        const uintptr_t Slot = reinterpret_cast<uintptr_t>(
+            reinterpret_cast<FindFn>(ExeBase() + kFindById)(reinterpret_cast<void*>(List), g_peerId));
+        if (!Slot) return true;
+        S->Found = true;
+        const uintptr_t Chr = *reinterpret_cast<const uintptr_t*>(Slot + 0x40);
+        S->ShortId = *reinterpret_cast<const uint16_t*>(Slot + 0x6A);
+        S->Hp = Chr ? *reinterpret_cast<const int32_t*>(Chr + 0x168) : 0;
+        if (!Chr || S->Hp <= 0) return true;   // not now: no character, or it is down
+        reinterpret_cast<void(__fastcall*)(void*, void*)>(ExeBase() + kDestroySlot)(
+            reinterpret_cast<void*>(List), reinterpret_cast<void*>(Slot));
+        S->Destroyed = true;
+        S->Queued = g_queueOriginal(reinterpret_cast<void*>(List), g_peerId, Merged, 1);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// The HUD's co-op bar keeps the name it took when the partner first showed up, in its own entry
+// (FeSceneCoopPlayerHpGuage at [[[GMImp+0x22E0]+0xD8]+0x388], entries +0x960 + i*0x100, key = the short
+// id at +0x00 and -1 at +0x04). A free key (0x7FFF) makes the next update take the entry again, with the
+// slot's new name.
+void ReleaseHudEntrySafe(uint16_t ShortId) {
+    __try {
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+        const uintptr_t Ui = Gm ? *reinterpret_cast<const uintptr_t*>(Gm + 0x22E0) : 0;
+        const uintptr_t Hud = Ui ? *reinterpret_cast<const uintptr_t*>(Ui + 0xD8) : 0;
+        const uintptr_t Bars = Hud ? *reinterpret_cast<const uintptr_t*>(Hud + 0x388) : 0;
+        if (!Bars) return;
+        for (int I = 0; I < 5; ++I) {
+            const uintptr_t E = Bars + 0x960 + static_cast<uintptr_t>(I) * 0x100;
+            if (*reinterpret_cast<const uint16_t*>(E) == ShortId && *reinterpret_cast<const int32_t*>(E + 4) == -1) {
+                *reinterpret_cast<uint16_t*>(E) = 0x7FFF;
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+// A quiet moment: my character alive, no boss fight running ([[GMImp+0x70]+0x88]+0x204, the phase).
+bool QuietForSwapSafe() {
+    __try {
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+        if (!Gm) return false;
+        if (*reinterpret_cast<const uint8_t*>(Gm + 0x24B1) & kWarpUnderWay) return false;
+        const uintptr_t Me = *reinterpret_cast<const uintptr_t*>(Gm + 0xD0);
+        if (!Me || *reinterpret_cast<const int32_t*>(Me + 0x168) <= 0) return false;
+        const uintptr_t EvMgr = *reinterpret_cast<const uintptr_t*>(Gm + 0x70);
+        const uintptr_t Boss = EvMgr ? *reinterpret_cast<const uintptr_t*>(EvMgr + 0x88) : 0;
+        return !Boss || *reinterpret_cast<const int32_t*>(Boss + 0x204) == 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void TryLookSwap(uintptr_t List) {
+    const ULONGLONG Now = GetTickCount64();
+    alignas(16) uint8_t Look[kLookBytes];
+    uint32_t Seq = 0;
+    {
+        std::lock_guard<std::mutex> Lock(g_lookMutex);
+        if (Now - g_lookAt > kLookKeepMs) {
+            g_lookPending.store(false);
+            g_lookDoneSeq = g_lookSeq;
+            LOG_INFO("[LOOK] the partner's look #%u waited %llu s for a quiet moment in one map -- dropped", g_lookSeq,
+                     static_cast<unsigned long long>((Now - g_lookAt) / 1000));
+            return;
+        }
+        std::memcpy(Look, g_look, kLookBytes);
+        Seq = g_lookSeq;
+    }
+    if (Now - g_lookSwappedAt < kLookGapMs) return;
+    if (!Session::SessionManager::GetInstance().IsActive()) {
+        g_lookPending.store(false);
+        return;
+    }
+    int32_t MyMap = 0;
+    const ULONGLONG TheirAt = g_partnerMapAt.load();
+    if (!ReadLocalRawMap(&MyMap) || !TheirAt || Now - TheirAt >= kPartnerMapFresh || g_partnerMap.load() != MyMap) return;
+    if (Now - g_localTravelAt.load() < kSettleMs || !QuietForSwapSafe()) return;
+
+    LookSwap S{};
+    bool Ran = false, Same = false, NoRecord = false;
+    {
+        std::lock_guard<std::mutex> Lock(g_recordMutex);
+        if (!g_haveRecord) {
+            NoRecord = true;
+        } else if (!LookDiffers(Look, g_record)) {
+            Same = true;
+        } else {
+            alignas(16) static uint8_t s_merged[kRecordSize];
+            std::memcpy(s_merged, g_record, kRecordSize);
+            MergeLook(s_merged, Look);
+            ForgetPartnerCharacter();   // npc_talk.cpp: the pointer the mod keeps goes with the old copy
+            ForgetPartnerCopy();        // pvp_modes.cpp: nothing is written back on the old copy
+            t_queueingOurselves = true;
+            Ran = SwapPartnerSafe(List, s_merged, &S);
+            t_queueingOurselves = false;
+            if (Ran && S.Destroyed && (S.Queued & 0xFF)) std::memcpy(g_record, s_merged, kRecordSize);
+        }
+    }
+    if (Ran && !S.Destroyed) return;   // the copy is not here, or it is down: later
+    {
+        std::lock_guard<std::mutex> Lock(g_lookMutex);
+        if (g_lookSeq == Seq) {
+            g_lookPending.store(false);
+            g_lookDoneSeq = Seq;
+        }
+    }
+    if (NoRecord || Same) {
+        LOG_INFO("[LOOK] the partner's look #%u: %s", Seq,
+                 NoRecord ? "no record of its character here -- nothing to make again"
+                          : "the one its character here was made with -- nothing to do");
+        return;
+    }
+    g_lookSwappedAt = Now;
+    if (Ran && (S.Queued & 0xFF)) ReleaseHudEntrySafe(S.ShortId);
+    LOG_INFO("[LOOK] the partner's character made again from its new look #%u: %s", Seq,
+             !Ran ? "threw" : !(S.Queued & 0xFF) ? "destroyed, but the queue was full -- its old record goes back in"
+                                                 : "done, and its HUD bar takes the new name");
+}
+
+void __fastcall ListTickDetour(void* List, float Dt) {
+    if (List && g_lookPending.load() && g_lookSwap.load()) TryLookSwap(reinterpret_cast<uintptr_t>(List));
+    g_listTickOriginal(List, Dt);
 }
 
 // True when a packet numbered for the partner's map would land on a different map
@@ -690,6 +871,26 @@ int ForgetStaleEnemyEntries(uintptr_t Mgr) {
     LiveRecordsSafe(Map, &First, &End);
     return ZeroEntriesOutsideSafe(Entries, First, End);
 }
+void NotePartnerLook(const uint8_t* Look, uint32_t Seq) {
+    if (!g_lookSwap.load() || !Look) return;
+    // A look without a name or a face is a character not made yet, or a model not loaded yet.
+    const uint16_t FirstChar = *reinterpret_cast<const uint16_t*>(Look + 0x29C);
+    bool AnyFace = false;
+    for (uint32_t I = 0; I < 0xA2 && !AnyFace; ++I) AnyFace = Look[0x18C + I] != 0;
+    if (!FirstChar || !AnyFace) return;
+    std::lock_guard<std::mutex> Lock(g_lookMutex);
+    if (Seq == g_lookDoneSeq || (g_lookPending.load() && Seq == g_lookSeq)) return;
+    std::memcpy(g_look, Look, kLookBytes);
+    g_lookSeq = Seq;
+    g_lookAt = GetTickCount64();
+    g_lookPending.store(true);
+    LOG_INFO("[LOOK] the partner's look #%u came -- compared with its character here at the next quiet moment", Seq);
+}
+
+void SetPartnerLookSwap(bool On) {
+    g_lookSwap.store(On);
+}
+
 bool InstallTravelSync(bool Enabled, bool DetachWhenApart) {
     static bool Installed = false;
     g_enabled.store(Enabled);
@@ -698,6 +899,8 @@ bool InstallTravelSync(bool Enabled, bool DetachWhenApart) {
         Installed = true;
         HookAt(kQueuePlayer, reinterpret_cast<void*>(&QueuePlayerDetour), reinterpret_cast<void**>(&g_queueOriginal),
                "the player character queue");
+        HookAt(kListTick, reinterpret_cast<void*>(&ListTickDetour), reinterpret_cast<void**>(&g_listTickOriginal),
+               "the player list tick (the partner made again from its new look)");
         HookAt(kEventPackets, reinterpret_cast<void*>(&EventPacketsDetour),
                reinterpret_cast<void**>(&g_eventPacketsOriginal), "the event-area packets");
         HookAt(kGenPackets, reinterpret_cast<void*>(&GenPacketsDetour),

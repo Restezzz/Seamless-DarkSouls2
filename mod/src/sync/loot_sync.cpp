@@ -918,7 +918,7 @@ void RememberPickup(const PickupProbe& P) {
         LOG_WARNING("[LOOT] picked up an item whose object has no saved id -- it cannot be remembered");
         return;
     }
-    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterName();
+    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterKey();
     if (Owner.empty()) {
         LOG_WARNING("[LOOT] picked up object %u but the character name is unreadable -- not remembered", P.Id);
         return;
@@ -1014,7 +1014,7 @@ void __fastcall AreaRestoreDetour(uintptr_t StateMgr, uint64_t AreaArg) {
     const uint32_t AreaId = static_cast<uint32_t>(AreaArg);
     const bool Mp = MultiplayerActiveSafe();
     if (!Mp && !HavePending()) return;   // alone, nothing remembered: the common case costs nothing
-    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterName();
+    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterKey();
     std::vector<PendingPod> Pods = OwnerPods(Owner, false, AreaId);
     if (!Mp && Pods.empty()) return;   // own world, nothing remembered: the game has done it all
 
@@ -1243,7 +1243,7 @@ void RememberOnceOnlyKill(const GeneratorDrop& D) {
                  OnceOnly ? "not all of it is taken yet" : "it comes back anyway: nothing to remember");
         return;
     }
-    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterName();
+    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterKey();
     if (Owner.empty()) return;
     const uint32_t Cycle = CurrentCycle();
     {
@@ -1341,7 +1341,7 @@ void ApplyHomeKillsBeforeArea(void* GenMgr, int32_t AreaIndex) {
         if (!Any) return;
     }
     if (MultiplayerActiveSafe()) return;   // someone else's world: that count goes to the session slot
-    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterName();
+    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterKey();
     const uintptr_t MapMgr = MapManager();
     int32_t Map = 0;
     if (Owner.empty() || !MapMgr || !AreaMapBySlotSafe(MapMgr, AreaIndex, &Map)) return;
@@ -1503,7 +1503,7 @@ void __fastcall ChestLidDetour(uintptr_t Box, uint8_t State) {
     const uint32_t Tens = State / 10 * 10;
     if (!Box || Tens == 10 || Tens == 50 || Tens == 70 || Tens == 90 || Tens == 120) return;
     if (!g_ok.load() || !g_enabled.load() || g_broken.load() || !MultiplayerActiveSafe()) return;
-    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterName();
+    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterKey();
     std::vector<PendingPod> Pods = OwnerPods(Owner, true, 0);
     LeftoverFacts F{};
     if (!PutChestLeftoversSafe(Box, Pods.data(), static_cast<int32_t>(Pods.size()), &F)) {
@@ -1578,7 +1578,7 @@ bool FindBrokenSafe(const uint32_t* Data, BrokenObject* Out) {
 }
 
 void RememberBroken(const BrokenObject& B, uint8_t State) {
-    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterName();
+    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterKey();
     if (Owner.empty()) return;
     {
         std::lock_guard<std::mutex> Lock(g_pendingMutex);
@@ -1755,11 +1755,13 @@ void WatchForNewCharacter() {
     s_namelessSince = 0;
     if (!s_newGame) return;
     s_newGame = false;
+    // Lines of this name and slot, and the old lines of the name alone (before 0.2.2 the slot was not kept).
+    const std::string Key = PlayerSync::GetInstance().GetOwnCharacterKey();
     size_t Dropped = 0;
     {
         std::lock_guard<std::mutex> Lock(g_pendingMutex);
         for (size_t I = 0; I < g_pending.size();) {
-            if (g_pending[I].Owner == Name) {
+            if (g_pending[I].Owner == Key || g_pending[I].Owner == Name) {
                 g_pending.erase(g_pending.begin() + static_cast<std::ptrdiff_t>(I));
                 ++Dropped;
             } else {
@@ -1768,8 +1770,8 @@ void WatchForNewCharacter() {
         }
         if (Dropped) SavePendingLocked();
     }
-    LOG_INFO("[LOOT] the new character is named %s: %zu line(s) of that name from another game dropped from %s",
-             Name.c_str(), Dropped, kPendingFile);
+    LOG_INFO("[LOOT] the new character is %s: %zu line(s) of that name from another game dropped from %s",
+             Key.c_str(), Dropped, kPendingFile);
 }
 
 void LootSyncGameTick() {
@@ -1780,7 +1782,7 @@ void LootSyncGameTick() {
         LOG_INFO("[LOOT] F4: not in multiplayer right now -- the world items are the game's own");
         return;
     }
-    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterName();
+    const std::string Owner = PlayerSync::GetInstance().GetOwnCharacterKey();
     std::vector<PendingPod> Pods = OwnerPods(Owner, true, 0);
     AreaStats S{};
     if (!ShowHideSafe(Req == kShow, Pods.data(), static_cast<int32_t>(Pods.size()), &S)) {

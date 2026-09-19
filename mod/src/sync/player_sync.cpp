@@ -3568,6 +3568,7 @@ bool PlayerSync::Initialize() {
         DS2Coop::Sync::SetFlagsCarryHome(Cfg.flags_carry_home);
         DS2Coop::Sync::SetGuestNpcHitsIgnored(Cfg.guest_npc_hits_ignored);
         DS2Coop::Sync::SetNpcEventsAfterTalk(Cfg.npc_events_after_talk);
+        DS2Coop::Sync::SetPartnerLookRefresh(Cfg.partner_look_refresh);
         DS2Coop::Sync::SetChestLidsReconcile(Cfg.chest_lids_reconcile);
         DS2Coop::Sync::InstallBossArena(Cfg.boss_guest_starts);
         DS2Coop::Sync::InstallFarDeathCamera(Cfg.far_death_camera);
@@ -3710,13 +3711,13 @@ static std::string ReadCharacterName() {
     uintptr_t gmImp = resolver.GetGameManagerImp();
     uintptr_t netSession = resolver.GetNetSessionManager();
 
-    // PATH 1: GMImp → [+0xA8] → +0x114 (wchar_t, LOCAL player's own name)
-    // Confirmed by Bob Edition CT + DS2S-META: OFLD(ANYSOTFS, STRBASEA, 0xa8, 0x114)
-    // This is the GameDataManager path — stores YOUR character name, not the host's.
+    // PATH 1: the name the game itself uses (exe+0x2D8400): [[GMImp+0xA8]+0xC0]+0x24, wchar_t -- YOUR
+    // character's own data. The cheat tables' "GameDataManager+0x114" lies past that 0xE0-byte object and
+    // only met the name because the next allocation happened to be this data.
     if (gmImp) {
-        uintptr_t gdm = 0;
-        if (Memory::Read<uintptr_t>(gmImp + 0xA8, &gdm) && gdm) {
-            std::string name = TryReadNameFrom(gdm + 0x114, "GameDataMgr+0x114");
+        uintptr_t gdm = 0, data = 0;
+        if (Memory::Read<uintptr_t>(gmImp + 0xA8, &gdm) && gdm && Memory::Read<uintptr_t>(gdm + 0xC0, &data) && data) {
+            std::string name = TryReadNameFrom(data + 0x24, "PlayerGameData+0x24");
             if (!name.empty()) return name;
         }
     }
@@ -4928,13 +4929,31 @@ std::string PlayerSync::GetLocalCharacterName() {
     return ReadCharacterName();
 }
 
+// The name the game itself uses for this player (exe+0x2D8400: [[GMImp+0xA8]+0xC0]+0x24, the character's
+// own data). The old "+0x114 of GameDataManager" read lay past that 0xE0-byte object and only met the name
+// because the next allocation happened to be that data.
 std::string PlayerSync::GetOwnCharacterName() {
-    uintptr_t Gm = 0, Gdm = 0;
+    uintptr_t Gm = 0, Gdm = 0, Data = 0;
     if (!Memory::Read<uintptr_t>(reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr)) + 0x16148F0, &Gm) || !Gm ||
-        !Memory::Read<uintptr_t>(Gm + 0xA8, &Gdm) || !Gdm) {
+        !Memory::Read<uintptr_t>(Gm + 0xA8, &Gdm) || !Gdm || !Memory::Read<uintptr_t>(Gdm + 0xC0, &Data) || !Data) {
         return "";
     }
     wchar_t Name[32] = {};
-    if (!TryReadNameBuffer(Gdm + 0x114, Name, 31) || Name[0] == 0) return "";
+    if (!TryReadNameBuffer(Data + 0x24, Name, 31) || Name[0] == 0) return "";
     return WcharToUtf8(Name);
+}
+
+// The save slot of the character being played: the load-menu records ([[GMImp+0xA8]+0xD8], ten of 0x1F0
+// bytes) keep the current one's index at +0x1368 -- the record the game writes on each save (exe+0x19C190).
+std::string PlayerSync::GetOwnCharacterKey() {
+    const std::string Name = GetOwnCharacterName();
+    if (Name.empty()) return "";
+    uintptr_t Gm = 0, Gdm = 0, Info = 0;
+    int32_t Slot = -1;
+    if (Memory::Read<uintptr_t>(reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr)) + 0x16148F0, &Gm) && Gm &&
+        Memory::Read<uintptr_t>(Gm + 0xA8, &Gdm) && Gdm && Memory::Read<uintptr_t>(Gdm + 0xD8, &Info) && Info &&
+        Memory::Read<int32_t>(Info + 0x1368, &Slot) && Slot >= 0 && Slot < 10) {
+        return Name + "#" + std::to_string(Slot);
+    }
+    return Name;
 }
