@@ -392,9 +392,10 @@ bool EventPacketTaskSafe(const uint8_t* Data, uint32_t* Map, int32_t* Event, uin
 // 'E' comes for every task of a map at once when its scripts start again (a rest, a load): 19.09 used up
 // the whole probe on those in two rests. So 'E' is only counted, and 'F'/'G' -- a condition met on the
 // other side, the host's transition -- are named one by one: event, sequence byte, the state key and mask.
-void NoteEventPacket(char Type, const uint8_t* Data, uint32_t Size) {
+void NoteEventPacket(char Type, const uint8_t* Data, uint32_t Size, bool Dropped) {
     if (Size < 12 || !Data) return;
     if (Type == 'E') {
+        if (Dropped) return;
         static std::atomic<uint32_t> s_restarts{ 0 };
         static std::atomic<ULONGLONG> s_loggedAt{ 0 };
         const uint32_t N = s_restarts.fetch_add(1) + 1;
@@ -421,7 +422,8 @@ void NoteEventPacket(char Type, const uint8_t* Data, uint32_t Size) {
     memcpy(&Sender, Data + 10, sizeof(Sender));
     if (Known) {
         LOG_INFO("[EVENTNET] '%c' from the partner (player %u) for event %d of map 0x%08X (task #%u, network byte %u): "
-                 "seq %u, key %u/%u, mask 0x%X", Type, Sender, Event, Map, Data[0], Net, Data[1], Key, Key16, Mask);
+                 "seq %u, key %u/%u, mask 0x%X%s", Type, Sender, Event, Map, Data[0], Net, Data[1], Key, Key16, Mask,
+                 Dropped ? " -- DROPPED: we stand in different maps (the lever? see docs 3.50)" : "");
     } else {
         LOG_INFO("[EVENTNET] '%c' from the partner (player %u) for task #%u -- the task was not found here",
                  Type, Sender, Data[0]);
@@ -431,9 +433,10 @@ void NoteEventPacket(char Type, const uint8_t* Data, uint32_t Size) {
 void __fastcall EventPacketsDetour(void* Listener, char Type, uint8_t* Data, uint32_t Size) {
     if (PartnerPacketForAnotherMap()) {
         g_mapPacketsDropped.fetch_add(1, std::memory_order_relaxed);
+        if (Type == 'F' || Type == 'G') NoteEventPacket(Type, Data, Size, true);
         return;
     }
-    if (Type == 'E' || Type == 'F' || Type == 'G') NoteEventPacket(Type, Data, Size);
+    if (Type == 'E' || Type == 'F' || Type == 'G') NoteEventPacket(Type, Data, Size, false);
     g_eventPacketsOriginal(Listener, Type, Data, Size);
 }
 
