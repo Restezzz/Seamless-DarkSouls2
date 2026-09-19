@@ -447,6 +447,21 @@ void ApplyKeptLiveStates(void* Mgr, int32_t AreaIndex) {
     }
 }
 
+} // namespace
+
+// A rest here (or the partner's, replayed here) has just put every enemy back on its feet, so the
+// states kept from the join -- "these were dead when I joined" -- are no longer true: applied to the
+// generators the rest rebuilds, they killed the freshly respawned enemies where they stood (21.09,
+// checklist 9: "they respawned at my place and died on the spot, and at the host they were alive").
+void ForgetKeptLiveStatesAfterRest(const char* Why) {
+    std::lock_guard<std::mutex> Lock(g_stashMutex);
+    if (!g_stash.Set) return;
+    g_stash.Set = false;
+    LOG_INFO("[WORLD] the host's live states kept for map %u dropped: %s", MapNumber(g_stash.Map), Why);
+}
+
+namespace {
+
 void __fastcall GenAreaCreateDetour(void* Mgr, int32_t AreaIndex) {
     if (g_waitSnapshot.load() && GuestInALobby()) {
         uintptr_t Ctrl = 0;

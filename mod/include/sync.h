@@ -225,6 +225,7 @@ void EnemyReconcileAfterArea(void* genMgr, int32_t areaIndex);    // game thread
 void EnemyReconcileNow();                                         // game thread, before the enemy sync is armed
 void ForgetHostEnemyStates(const char* why);                      // game thread: a world reset here, or out of the world
 void ForgetHostEnemyStatesAfterRest(const char* why);             // game thread: the same, and the host's next lists waited out
+void ForgetKeptLiveStatesAfterRest(const char* why);              // game thread: the join's "these were dead" states
 void NoteHostEnemyDeadList(int32_t map, uint8_t source, const uint16_t* ids, uint16_t count);      // network thread
 void NoteHostKillCounts(int32_t map, const uint16_t* index, const uint8_t* kills, uint16_t count); // network thread
 // A boss fight that ends while one of the players is down (boss_down.cpp, docs §3.47): the
