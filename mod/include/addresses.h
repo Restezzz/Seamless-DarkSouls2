@@ -223,7 +223,8 @@ namespace Offsets {
         constexpr uint32_t PhantomData = 0x1E8;
         constexpr uint32_t ConnectionState = 0x8;
         constexpr uint32_t PlayerName = 0x234;
-        constexpr uint32_t AllottedTime = 0x17C;
+        // No AllottedTime: +0x17C of [this+0x18] is past the end of the 0x100-byte multiplayer
+        // manager (19.09, player_sync.cpp).
         constexpr uint32_t PhantomType = 0x1F4;
     }
 }

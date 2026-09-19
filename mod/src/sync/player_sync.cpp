@@ -3476,6 +3476,9 @@ static bool g_debugHotkeys = false;
 static bool HotkeyDown(int vk) {
     if (!g_debugHotkeys) return false;
     if (vk == DS2Coop::UI::GetMenuKey()) return false;
+    // A debug key is the bare key: Alt+F4 closing the game is not F4 (19.09, it switched the world
+    // items off on the way out).
+    if ((GetAsyncKeyState(VK_MENU) | GetAsyncKeyState(VK_CONTROL)) & 0x8000) return false;
     return (GetAsyncKeyState(vk) & 0x8000) != 0;
 }
 
@@ -3883,7 +3886,6 @@ void PlayerSync::Update(float deltaTime) {
     __try {
         m_positionSyncTimer += deltaTime;
         m_stateSyncTimer += deltaTime;
-        m_phantomTimerRefresh += deltaTime;
 
         if (m_positionSyncTimer >= POSITION_SYNC_INTERVAL) {
             SyncLocalPlayerPosition();
@@ -3903,11 +3905,12 @@ void PlayerSync::Update(float deltaTime) {
         // as the player moves.
         ApplyRegionForce();
 
-        // Keep phantom timer maxed every 5s (infrequent is fine)
-        if (m_phantomTimerRefresh >= 5.0f) {
-            MaxPhantomTimer();
-            m_phantomTimerRefresh = 0.0f;
-        }
+        // The "phantom timer" of the old code is gone (19.09, the host's crash at exe+0x2C6DA9): it wrote
+        // 99999.0f to [[net root]+0x18]+0x17C every 5 s, but [net root+0x18] is the multiplayer manager,
+        // 0x100 bytes (exe+0x513BE0 allocates it for exe+0x2C5810), so the float landed 0x7C bytes past
+        // it -- in the host's run on the high half of the manager pointer itself (0x47C34F80'2AA60FE0),
+        // and the next read of that pointer crashed. A phantom's time is counted elsewhere
+        // (exe+0x25F830 -> exe+0x51C540, per player slot); the write never reached it.
 
         // Keep permission patches active every 1s — bonfire bits are checked
         // every frame by the game, so 5s gaps cause intermittent blocking.
@@ -4417,35 +4420,6 @@ bool PlayerSync::GrantSoapstones() {
         g_itemGiveFunc = nullptr;
         return false;
     }
-}
-
-// ============================================================================
-// Max out phantom AllottedTime so the summon never expires
-// ============================================================================
-bool PlayerSync::MaxPhantomTimer() {
-    auto& resolver = DS2Coop::AddressResolver::GetInstance();
-    uintptr_t netSession = resolver.GetNetSessionManager();
-    if (!netSession) {
-        LOG_ERROR("MaxPhantomTimer: NetSessionManager not resolved");
-        return false;
-    }
-
-    // NetSessionManager -> +0x18 (SessionPointer) -> +0x17C (AllottedTime)
-    uintptr_t sessionPtr = 0;
-    if (!Memory::Read<uintptr_t>(netSession + Offsets::NetSession::SessionPointer, &sessionPtr) || !sessionPtr) {
-        LOG_WARNING("MaxPhantomTimer: no active session pointer");
-        return false;
-    }
-
-    // Set AllottedTime to a huge value (float, in seconds)
-    float maxTime = 99999.0f;
-    if (Memory::Write<float>(sessionPtr + Offsets::NetSession::AllottedTime, maxTime)) {
-        LOG_DEBUG("MaxPhantomTimer: AllottedTime set to %.0f", maxTime);
-        return true;
-    }
-
-    LOG_DEBUG("MaxPhantomTimer: failed to write AllottedTime");
-    return false;
 }
 
 // ============================================================================

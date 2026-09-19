@@ -55,6 +55,15 @@ Fixes for the two reports of 17.09 and the answers to the 0.2.1 checklist. Part 
   transfers in co-op, dialogue progress and NPC items, doors opened with a guest's key, only players drawn as humans.
   Раньше в 0.2.2: уведомления о перемещениях и кострах, фигурка хоста больше не мешает напарнику, переходы с
   катсценой в коопе, прогресс диалогов и предметы от NPC, двери ключом гостя, человеком рисуются только игроки.
+- A host crash when a guest joins: an inherited "phantom timer" write landed past the end of the game's
+  multiplayer manager every 5 seconds and could hit the manager pointer itself. Removed; the game keeps the
+  phantom's time elsewhere.
+  Вылет хоста при входе гостя: унаследованная запись «таймера фантома» раз в 5 секунд уходила за конец менеджера
+  мультиплеера игры и могла попасть в сам указатель на него. Убрана; время фантома игра считает в другом месте.
+- A new game together: making the characters at the crones' at the same time no longer leaves the host on a black
+  screen (Things Betwixt's event scripts answer a guest as on 18.09).
+  Новая игра вместе: создание персонажей у старушек одновременно больше не оставляет хоста с чёрным экраном
+  (скрипты событий Междумирья отвечают гостю как 18.09).
 
 Both players need 0.2.2: three new packets between the players.
 Нужна 0.2.2 у обоих: три новых пакета между игроками.

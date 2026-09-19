@@ -248,6 +248,9 @@ void SetTravelPoseFix(bool on);
 // ini flags_carry_home).
 void SetRestReplayFull(bool on);
 void SetFlagsCarryHome(bool on);
+// mp_gates.cpp: the event manager's hold counter (+0x1B4) and the byte it drives, logged as they
+// change (19.09 probe: the host's black screen after making its character).
+void EventViewProbeTick();
 // Chests the host has open, opened for a guest in every map it loads (chest_lids.cpp, docs
 // §3.47); what lies in them follows the guest's own save (loot_sync.cpp).
 void SetChestLidsReconcile(bool on);
@@ -381,7 +384,6 @@ public:
 
     // Seamless helpers
     bool GrantSoapstones();
-    bool MaxPhantomTimer();
     void EnableSummoning();
     std::string GetLocalCharacterName();
 
@@ -394,7 +396,6 @@ private:
     bool m_initialized = false;
     float m_positionSyncTimer = 0.0f;
     float m_stateSyncTimer = 0.0f;
-    float m_phantomTimerRefresh = 0.0f;
     
     static constexpr float POSITION_SYNC_INTERVAL = 0.05f; // 20 times per second
     static constexpr float STATE_SYNC_INTERVAL = 0.5f;     // 2 times per second

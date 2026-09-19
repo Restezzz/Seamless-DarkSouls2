@@ -179,6 +179,25 @@ bool ReadTaskKey(uintptr_t Task, uint32_t* Map, int32_t* Event) {
     }
 }
 
+// Probe (19.09, the host's black screen after making its character): ESD command 132242 raises
+// or lowers the event manager's hold counter [[GMImp+0x70]+0x1B4] (exe+0x44E930 / exe+0x44FEE0) and,
+// between 0 and 1, writes [[GMImp+0xB8]+0x1A4]; the crones' offer (m10_02 event 16000) raises it
+// for the whole of the making and lowers it at the very end. Both logged as they change.
+bool ReadEventViewSafe(int32_t* Hold, int32_t* Byte) {
+    __try {
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + 0x16148F0);
+        if (!Gm) return false;
+        const uintptr_t EvMgr = *reinterpret_cast<const uintptr_t*>(Gm + 0x70);
+        const uintptr_t B8 = *reinterpret_cast<const uintptr_t*>(Gm + 0xB8);
+        if (!EvMgr || !B8) return false;
+        *Hold = *reinterpret_cast<const int32_t*>(EvMgr + 0x1B4);
+        *Byte = *reinterpret_cast<const uint8_t*>(B8 + 0x1A4);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 bool IsGatedTransfer(uint32_t Map, int32_t Event) {
     for (const GatedEvent& G : kGatedTransfers) {
         if (G.Map == Map && G.Event == Event) return true;
@@ -359,6 +378,20 @@ bool HookAt(uint32_t Rva, void* Detour, void** Original, const char* What) {
 }
 
 } // namespace
+
+void EventViewProbeTick() {
+    static int32_t s_hold = -1, s_byte = -1;
+    static uint32_t s_lines = 0;
+    int32_t Hold = 0, Byte = 0;
+    if (!ReadEventViewSafe(&Hold, &Byte)) return;
+    if (Hold == s_hold && Byte == s_byte) return;
+    const bool First = s_hold < 0;
+    s_hold = Hold;
+    s_byte = Byte;
+    if (First || s_lines >= 200) return;
+    ++s_lines;
+    LOG_INFO("[VIEW] the event manager's hold counter is %d, [[GMImp+0xB8]+0x1A4] = %d (ESD 132242)", Hold, Byte);
+}
 
 // The event task this thread is updating right now (exe+0x196B80), 0 outside one -- what tells
 // an event script from a talk script when both ask the same thing (guest_world.cpp).

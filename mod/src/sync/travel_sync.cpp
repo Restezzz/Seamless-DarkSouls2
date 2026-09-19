@@ -351,11 +351,76 @@ bool PartnerPacketForAnotherMap() {
     return g_partnerMap.load(std::memory_order_relaxed) != MyMap;
 }
 
+// Probe (19.09, the host's black screen after making its character): which event task a packet
+// 'E'/'F'/'G' moves. The packet names the task by its index in the area of the map exe+0x2C6DE0
+// names (byte 0, [task+0x2C]); the receiver finds the area as exe+0x18A500 does --
+// exe+0x452FB0([[GMImp+0x70]+0x10], map) -- and the task at [[area+0x38] + index*8]: event id
+// [task+0x28], raw map [[task+8]+0x18], network byte [task+0x2F]. Once per type, map and event.
+constexpr uint32_t kJoinMapOf   = 0x2C6DE0;   // (multiplayer manager, u32* out) -> u32*: the map packets are for
+constexpr uint32_t kAreaForMap  = 0x452FB0;   // (event list, map) -> the map's event area
+
+bool EventPacketTaskSafe(const uint8_t* Data, uint32_t* Map, int32_t* Event, uint8_t* Net) {
+    __try {
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp);
+        const uintptr_t EvMgr = Gm ? *reinterpret_cast<const uintptr_t*>(Gm + 0x70) : 0;
+        const uintptr_t Root = *reinterpret_cast<const uintptr_t*>(ExeBase() + kNetRoot);
+        const uintptr_t Mp = Root ? *reinterpret_cast<const uintptr_t*>(Root + 0x18) : 0;
+        if (!EvMgr || !Mp || !*reinterpret_cast<const uintptr_t*>(Gm + 0x22F0)) return false;
+        uint32_t Out[2] = {};
+        const uint32_t* JoinMap = reinterpret_cast<const uint32_t*(__fastcall*)(uintptr_t, uint32_t*)>(
+            ExeBase() + kJoinMapOf)(Mp, Out);
+        if (!JoinMap) return false;
+        const uintptr_t Area = reinterpret_cast<uintptr_t(__fastcall*)(uintptr_t, uint32_t)>(
+            ExeBase() + kAreaForMap)(*reinterpret_cast<const uintptr_t*>(EvMgr + 0x10), *JoinMap);
+        if (!Area) return false;
+        const uintptr_t Tasks = *reinterpret_cast<const uintptr_t*>(Area + 0x38);
+        const uintptr_t Info = *reinterpret_cast<const uintptr_t*>(Area + 0x20);
+        const uintptr_t List = Info ? *reinterpret_cast<const uintptr_t*>(Info + 0x10) : 0;
+        if (!Tasks || !List || Data[0] >= *reinterpret_cast<const uint16_t*>(List + 10)) return false;
+        const uintptr_t Task = *reinterpret_cast<const uintptr_t*>(Tasks + static_cast<uintptr_t>(Data[0]) * 8);
+        if (!Task) return false;
+        const uintptr_t TaskArea = *reinterpret_cast<const uintptr_t*>(Task + 0x08);
+        *Event = *reinterpret_cast<const int32_t*>(Task + 0x28);
+        *Map = TaskArea ? *reinterpret_cast<const uint32_t*>(TaskArea + 0x18) : 0;
+        *Net = *reinterpret_cast<const uint8_t*>(Task + 0x2F);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void NoteEventPacket(char Type, const uint8_t* Data, uint32_t Size) {
+    if (Size < 12 || !Data) return;
+    uint32_t Map = 0;
+    int32_t Event = 0;
+    uint8_t Net = 0;
+    const bool Known = EventPacketTaskSafe(Data, &Map, &Event, &Net);
+    static uint64_t s_told[96] = {};
+    static uint32_t s_count = 0;
+    const uint64_t Key = (static_cast<uint64_t>(static_cast<uint8_t>(Type)) << 56) |
+                         (static_cast<uint64_t>(Map & 0xFFFFFF) << 32) | static_cast<uint32_t>(Event);
+    for (uint32_t I = 0; I < s_count; ++I) {
+        if (s_told[I] == Key) return;
+    }
+    if (s_count >= 96) return;
+    s_told[s_count++] = Key;
+    uint16_t Sender = 0;
+    memcpy(&Sender, Data + 10, sizeof(Sender));
+    if (Known) {
+        LOG_INFO("[EVENTNET] '%c' from the partner (player %u) for event %d of map 0x%08X (task #%u, network "
+                 "byte %u) -- applied", Type, Sender, Event, Map, Data[0], Net);
+    } else {
+        LOG_INFO("[EVENTNET] '%c' from the partner (player %u) for task #%u -- the task was not found here",
+                 Type, Sender, Data[0]);
+    }
+}
+
 void __fastcall EventPacketsDetour(void* Listener, char Type, uint8_t* Data, uint32_t Size) {
     if (PartnerPacketForAnotherMap()) {
         g_mapPacketsDropped.fetch_add(1, std::memory_order_relaxed);
         return;
     }
+    if (Type == 'E' || Type == 'F' || Type == 'G') NoteEventPacket(Type, Data, Size);
     g_eventPacketsOriginal(Listener, Type, Data, Size);
 }
 

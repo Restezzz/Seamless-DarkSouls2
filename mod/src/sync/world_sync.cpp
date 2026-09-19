@@ -201,6 +201,7 @@ void __fastcall GenUpdateDetour(void* Manager, float* Dt) {
     ChrDeathTick();
     EnemyReconcileTick();
     ChestLidsTick();
+    EventViewProbeTick();
     if (g_pending.exchange(false) && g_enabled.load() && !g_broken.load()) {
         std::string From;
         {

@@ -226,18 +226,29 @@ uint64_t __fastcall AreaEventsRunDetour(void* Area) {
 // in the Forest ("the game's answer 1 kept"), and the guest had no "Talk" in Majula nor the
 // hatchlings in the nest. So only the lift's own event gets the game's answer; every other event
 // script gets "no", as up to 0.2.1 (ini guest_lift_fix).
+//
+// Except Things Betwixt, all of it (the second 0.2.2 test, 19.09). A new game started together: both
+// players took the crones' offer in the same second, as on 18.09 -- but this time the crones' own
+// events (111100-111150, 4000000) ran for the guest down the owner's branch, and the host, whose
+// character was made in the very second the guest's was (flags 102000012/102000015 at 18:35:09 on
+// both sides), was left on a black screen with only the HUD. On 18.09 those events took the game's
+// answer ("the game's answer 1 kept" at 22:52:53) and both made their characters. There the crones
+// only tell lore once the characters exist, and the guest still makes its own character: the
+// crones' offer is event 16000, which never asks 130602.
 struct OwnAnswerEvent {
     uint32_t Map;
     int32_t  Event;
 };
+constexpr int32_t kAnyEvent = -1;
 constexpr OwnAnswerEvent kOwnAnswerEvents[] = {
-    { 0x0A1E0000u, 1030 },   // m10_30: the lift's init (cabin 10302000 to state 40, flag 130000001)
+    { 0x0A1E0000u, 1030 },        // m10_30: the lift's init (cabin 10302000 to state 40, flag 130000001)
+    { 0x0A020000u, kAnyEvent },   // m10_02: Things Betwixt, where the characters are made
 };
 
 bool OwnAnswerEventFor(uintptr_t Task, uint32_t* MapOut, int32_t* EventOut) {
     if (!ReadEventTaskKey(Task, MapOut, EventOut)) return false;
     for (const OwnAnswerEvent& E : kOwnAnswerEvents) {
-        if (E.Map == *MapOut && E.Event == *EventOut) return true;
+        if (E.Map == *MapOut && (E.Event == kAnyEvent || E.Event == *EventOut)) return true;
     }
     return false;
 }
