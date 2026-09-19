@@ -131,6 +131,10 @@ struct ModConfig {
     // A guest's hits on NPCs of the host's world are not counted towards their anger: an NPC hit
     // a few times still talks to the guest (npc_progress.cpp, docs §3.47). On.
     bool guest_npc_hits_ignored = true;
+    // A flag an event of the host's world sets for a guest within 15 s of the guest's talk is written
+    // (the game drops it): the Emerald Herald's "gave the flask", NPC dialogue that goes on after the
+    // first line (npc_progress.cpp, docs §3.50). On.
+    bool npc_events_after_talk = true;
     // Chests the host has open are opened for a guest in every map it loads -- old chests the host
     // opened long ago could not be opened by the guest at all (chest_lids.cpp, docs §3.47). On.
     bool chest_lids_reconcile = true;

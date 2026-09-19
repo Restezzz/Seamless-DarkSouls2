@@ -84,6 +84,7 @@ using GenKillFn    = void(__fastcall*)(uintptr_t, uintptr_t, uint8_t, uint8_t);
 using SlotCopyFn   = void(__fastcall*)(uintptr_t, const uint8_t*);
 
 std::atomic<bool> g_deadRecords{ true };   // ini enemy_dead_reconcile
+constexpr ULONGLONG kDeadQuietMs = 8000;   // after a rest here, the host's lists this long are older than the rest
 std::atomic<bool> g_killCounts{ true };    // ini kill_counts_reconcile
 
 // Guest: the host's latest per raw map (network thread writes, game thread reads).
@@ -96,6 +97,8 @@ std::map<int32_t, std::vector<uint16_t>> g_deadByMap;
 std::map<int32_t, HostKills>             g_killsByMap;
 std::atomic<bool>                        g_cacheNew{ false };
 std::atomic<uint32_t>                    g_deadHeard{ 0 };
+std::atomic<ULONGLONG>                   g_deadQuietUntil{ 0 };   // a rest here: the host's older lists are stale
+std::atomic<uint32_t>                    g_deadQuietDropped{ 0 };
 std::atomic<uint32_t>                    g_killsHeard{ 0 };
 
 // Host: what went out to the guest now in the world (game thread only).
@@ -700,6 +703,14 @@ void NoteHostEnemyDeadList(int32_t Map, uint8_t Source, const uint16_t* Ids, uin
         Count > kMaxRecords) {
         return;
     }
+    if (GetTickCount64() < g_deadQuietUntil.load()) {
+        const uint32_t N = g_deadQuietDropped.fetch_add(1) + 1;
+        if (N <= 10) {
+            LOG_INFO("[ENEMIES] the host's map %u: a list of %u killed enemies right after a rest -- older than the "
+                     "rest, dropped", MapNumber(Map), Count);
+        }
+        return;
+    }
     std::vector<uint16_t> Sorted(Ids, Ids + Count);
     std::sort(Sorted.begin(), Sorted.end());
     {
@@ -738,6 +749,16 @@ void NoteHostKillCounts(int32_t Map, const uint16_t* Index, const uint8_t* Kills
     if (N <= 50 || N % 100 == 0) {
         LOG_INFO("[ENEMIES] the host's kill counters of map %u: %u generators", MapNumber(Map), Count);
     }
+}
+
+// A rest here, the guest's own or the partner's replayed (19.09 at 21:45:17: the guest rested, its game
+// stood the enemies up -- and a list the host had sent before its own replay (19:45:18 on the host's clock)
+// came in the next second: "dead wins" killed the two freshly stood enemies again, where they had
+// stood up, the kill counters went 2 -> 4 and the souls came twice; they stood only after a second rest).
+// Lists that come in the next kDeadQuietMs are older than the rest and are dropped.
+void ForgetHostEnemyStatesAfterRest(const char* Why) {
+    g_deadQuietUntil.store(GetTickCount64() + kDeadQuietMs);
+    ForgetHostEnemyStates(Why);
 }
 
 void ForgetHostEnemyStates(const char* Why) {

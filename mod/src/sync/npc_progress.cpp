@@ -98,6 +98,8 @@ constexpr uint8_t   kCountFlags      = 7;          // bag and item box
 constexpr uint32_t  kMaxGiftItems    = 16;
 constexpr ULONGLONG kGiftKeepMs      = 10 * 60 * 1000;   // a gift waits this long for the player to stand in the game
 constexpr uint32_t  kTalkWritesLogged = 300;
+constexpr ULONGLONG kAfterTalkMs     = 15000;   // an event's flag this soon after the guest's talk is the talk's
+constexpr ULONGLONG kTalkWatchMs     = 250;
 
 using FlagSetFn  = void(__fastcall*)(void* flags, uint32_t id, char value);
 using FlagRawFn  = bool(__fastcall*)(void* flags, uint32_t id, char value);
@@ -144,6 +146,11 @@ bool ReadPtr(uintptr_t Addr, uintptr_t* Out) {
 bool TalkOpen() {
     return IsTalkOpenNearby();
 }
+
+// When a talk was last seen open (NpcProgressGameTick), for the event flags that follow it.
+std::atomic<ULONGLONG> g_talkSeenAt{ 0 };
+std::atomic<bool>      g_afterTalk{ true };      // ini npc_events_after_talk
+std::atomic<uint32_t>  g_afterTalkWrites{ 0 };
 
 bool GuestInHostWorld() {
     auto& Lobby = Session::SessionManager::GetInstance();
@@ -257,6 +264,22 @@ void __fastcall FlagSetDetour(void* Flags, uint32_t Id, char Value) {
         // map events' writes the game drops for a guest, once per flag.
         bool Ok = false;
         if (!GuestMaySafe(Id, &Ok) && Ok) {
+            // Right after a talk, the event is the talk's own sequel (19.09: the Emerald Herald gave the
+            // guest the flask at 21:22:33, four seconds after the talk closed, and her event set 201100 and
+            // 102090 -- dropped, so she stayed at her first lines for the guest and never offered levels).
+            // Written as the talk's own flags are; an NPC's hostility still never is.
+            if (g_afterTalk.load() && GetTickCount64() - g_talkSeenAt.load() < kAfterTalkMs &&
+                !(Id >= kHostileFlagLow && Id <= kHostileFlagHigh)) {
+                const int Before = ReadFlagSafe(Flags, Id);
+                bool Threw = false;
+                const bool Changed = WriteFlagRawSafe(Flags, Id, Value, &Threw);
+                if (g_afterTalkWrites.fetch_add(1) < kTalkWritesLogged) {
+                    LOG_INFO("[TALK] an event right after my talk set flag %u = %d, a guest's write the game drops -- "
+                             "written here: %s (was %d)", Id, Value ? 1 : 0,
+                             Threw ? "threw" : Changed ? "changed" : "no change", Before);
+                }
+                return;
+            }
             static uint32_t s_told[128] = {};
             static uint32_t s_toldCount = 0;
             bool Told = false;
@@ -458,6 +481,10 @@ void SetGuestNpcHitsIgnored(bool On) {
     g_npcHitsIgnored.store(On);
 }
 
+void SetNpcEventsAfterTalk(bool On) {
+    g_afterTalk.store(On);
+}
+
 void NotePartnerNpcGift(const void* Items, uint32_t Count, const std::string& From) {
     if (!Items || !Count || !g_enabled.load()) return;
     PendingGift Gift{};
@@ -474,6 +501,14 @@ void NotePartnerNpcGift(const void* Items, uint32_t Count, const std::string& Fr
 }
 
 void NpcProgressGameTick() {
+    {
+        static ULONGLONG s_watchAt = 0;
+        const ULONGLONG Now = GetTickCount64();
+        if (Now - s_watchAt >= kTalkWatchMs) {
+            s_watchAt = Now;
+            if (g_afterTalk.load() && TalkOpen()) g_talkSeenAt.store(Now);
+        }
+    }
     PendingGift Taken[8];
     uint32_t TakenCount = 0;
     {

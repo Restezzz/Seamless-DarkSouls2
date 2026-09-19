@@ -64,6 +64,15 @@ Fixes for the two reports of 17.09 and the answers to the 0.2.1 checklist. Part 
   screen (Things Betwixt's event scripts answer a guest as on 18.09).
   Новая игра вместе: создание персонажей у старушек одновременно больше не оставляет хоста с чёрным экраном
   (скрипты событий Междумирья отвечают гостю как 18.09).
+- Fixes for the test of 19.09 evening: a guest is no longer sent home after each of its own travels (a missed
+  "partner is back" packet); a new character no longer inherits the chest and pickup records of an earlier game
+  under the same name; the host world's flags reach a guest's own world before its map's scripts start (the crones
+  at home do not offer the making again, the gift is not given twice); enemies no longer stand up as corpses after
+  a guest's rest; the Emerald Herald goes on past her first lines for a guest.
+  Исправления по тесту 19.09 вечером: гостя больше не отправляет домой после каждого его перемещения (потерянный пакет
+  «напарник встал»); новый персонаж не наследует записи сундуков и подобранного из прошлой игры под тем же именем;
+  флаги мира хоста попадают в мир гостя до запуска скриптов карты (старушки дома не предлагают создание снова, дар не
+  выдаётся дважды); мобы после отдыха гостя не встают трупами; Хранительница Огня говорит с гостем дальше первых фраз.
 
 Both players need 0.2.2: three new packets between the players.
 Нужна 0.2.2 у обоих: три новых пакета между игроками.

@@ -449,6 +449,10 @@ void __fastcall GenAreaCreateDetour(void* Mgr, int32_t AreaIndex) {
             g_deferSince.store(0);
         }
     }
+    uintptr_t CarryCtrl = 0;
+    if (!GuestInALobby() || JoinState(&CarryCtrl) != 7) {
+        CarryHostWorldFlagsHomeNow("a map of my own world is being made");   // player_sync.cpp
+    }
     EnemyReconcileBeforeArea(Mgr, AreaIndex);
     ApplyHomeKillsBeforeArea(Mgr, AreaIndex);   // loot_sync.cpp: once-only enemies killed elsewhere
     g_genCreate(Mgr, AreaIndex);

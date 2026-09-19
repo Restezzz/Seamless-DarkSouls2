@@ -98,6 +98,7 @@ constexpr int32_t  kResultBossKilled = 0x12;      // result code of a boss kill
 constexpr int32_t  kResultHostDied   = 4;         // result code "the world's host died"
 constexpr int      kLeaveHostDied    = 3;         // the reason that result hands the join controller (exe+0x2C9220)
 constexpr ULONGLONG kHostDeadUnseenMs = 3000;     // the host dead this long with no result of the game's own here
+constexpr ULONGLONG kStateAliveAfterDeathMs = 3000;   // a state packet this soon after a death packet may be older
 constexpr ULONGLONG kHostKillFreshMs  = 30000;    // a kill the host reported counts this long here
 constexpr ULONGLONG kHostEndGraceMs   = 5000;     // a fight that ended with no kill heard of: wait this long
 constexpr ULONGLONG kHostKillRepeatMs = 10000;    // the host repeats a kill this long after the fight is over
@@ -155,7 +156,8 @@ void* g_battleStartOriginal   = nullptr;
 void* g_acceptEventOriginal   = nullptr;
 
 std::atomic<bool>      g_enabled{ true };
-std::atomic<bool>      g_partnerAlive{ true };     // from the partner's PlayerDeath / PlayerRespawn
+std::atomic<bool>      g_partnerAlive{ true };     // from the partner's PlayerDeath / PlayerRespawn / PlayerState
+std::atomic<ULONGLONG> g_partnerDiedAt{ 0 };
 std::atomic<ULONGLONG> g_partnerBackAt{ 0 };       // when the partner last got up again
 std::atomic<bool>      g_hostTravelPending{ false }; // the host travelled by bonfire (HostTravelled)
 std::atomic<int32_t>   g_hostTravelMap{ 0 };
@@ -2226,7 +2228,22 @@ void DeathSyncGameTick() {
 
 void NotePartnerLife(bool Alive) {
     const bool Was = g_partnerAlive.exchange(Alive);
+    if (!Alive) g_partnerDiedAt.store(GetTickCount64());
     if (Alive && !Was) g_partnerBackAt.store(GetTickCount64());
+}
+
+// The partner's HP from its PlayerState packets (19.09: the guest was sent home after every travel of its
+// own). The host fell at 21:31:14, the guest was sent home at 21:31:18 and so missed the host's
+// PlayerRespawn (19:31:29 on the host's clock) -- "the partner is dead" stayed for the rest of the session,
+// and TickHostDiedElsewhere took each map the guest travelled to without the host for "the host died
+// there": home at 21:34:54, 21:35:59, 21:47:19, 21:49:38. The state packets come every 0.5 s: HP above 0
+// makes the partner alive again, though not in the first seconds after its death packet (a state packet
+// sent before the death may come in after it).
+void NotePartnerStateHp(int32_t Hp, int32_t MaxHp) {
+    if (Hp <= 0 || MaxHp <= 0 || g_partnerAlive.load()) return;
+    if (GetTickCount64() - g_partnerDiedAt.load() < kStateAliveAfterDeathMs) return;
+    NotePartnerLife(true);
+    LOG_INFO("[DEATH] the partner reports HP %d/%d -- alive (its \"back\" packet never came here)", Hp, MaxHp);
 }
 
 void NoteHostTravelled(int32_t RawMap, int32_t Bonfire) {

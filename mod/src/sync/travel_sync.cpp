@@ -389,26 +389,39 @@ bool EventPacketTaskSafe(const uint8_t* Data, uint32_t* Map, int32_t* Event, uin
     }
 }
 
+// 'E' comes for every task of a map at once when its scripts start again (a rest, a load): 19.09 used up
+// the whole probe on those in two rests. So 'E' is only counted, and 'F'/'G' -- a condition met on the
+// other side, the host's transition -- are named one by one: event, sequence byte, the state key and mask.
 void NoteEventPacket(char Type, const uint8_t* Data, uint32_t Size) {
     if (Size < 12 || !Data) return;
+    if (Type == 'E') {
+        static std::atomic<uint32_t> s_restarts{ 0 };
+        static std::atomic<ULONGLONG> s_loggedAt{ 0 };
+        const uint32_t N = s_restarts.fetch_add(1) + 1;
+        const ULONGLONG Now = GetTickCount64();
+        if (Now - s_loggedAt.load() >= 5000) {
+            s_loggedAt.store(Now);
+            s_restarts.store(0);
+            LOG_INFO("[EVENTNET] %u 'E' from the partner (its event scripts started again)", N);
+        }
+        return;
+    }
     uint32_t Map = 0;
     int32_t Event = 0;
     uint8_t Net = 0;
     const bool Known = EventPacketTaskSafe(Data, &Map, &Event, &Net);
-    static uint64_t s_told[96] = {};
     static uint32_t s_count = 0;
-    const uint64_t Key = (static_cast<uint64_t>(static_cast<uint8_t>(Type)) << 56) |
-                         (static_cast<uint64_t>(Map & 0xFFFFFF) << 32) | static_cast<uint32_t>(Event);
-    for (uint32_t I = 0; I < s_count; ++I) {
-        if (s_told[I] == Key) return;
-    }
-    if (s_count >= 96) return;
-    s_told[s_count++] = Key;
-    uint16_t Sender = 0;
+    if (s_count >= 400) return;
+    ++s_count;
+    uint32_t Key = 0;
+    uint16_t Key16 = 0, Mask = 0, Sender = 0;
+    memcpy(&Key, Data + 2, sizeof(Key));
+    memcpy(&Key16, Data + 6, sizeof(Key16));
+    memcpy(&Mask, Data + 8, sizeof(Mask));
     memcpy(&Sender, Data + 10, sizeof(Sender));
     if (Known) {
-        LOG_INFO("[EVENTNET] '%c' from the partner (player %u) for event %d of map 0x%08X (task #%u, network "
-                 "byte %u) -- applied", Type, Sender, Event, Map, Data[0], Net);
+        LOG_INFO("[EVENTNET] '%c' from the partner (player %u) for event %d of map 0x%08X (task #%u, network byte %u): "
+                 "seq %u, key %u/%u, mask 0x%X", Type, Sender, Event, Map, Data[0], Net, Data[1], Key, Key16, Mask);
     } else {
         LOG_INFO("[EVENTNET] '%c' from the partner (player %u) for task #%u -- the task was not found here",
                  Type, Sender, Data[0]);

@@ -182,6 +182,7 @@ bool InstallJoinProbe();
 void ChrDeathTick();   // game thread
 void DeathSyncGameTick();             // game thread, every frame
 void NotePartnerLife(bool alive);     // the partner's own PlayerDeath / PlayerRespawn
+void NotePartnerStateHp(int32_t hp, int32_t maxHp);   // network thread: the partner's PlayerState, every 0.5 s
 // The host's boss fight (BossState): battle id, phase, the event area it belongs
 // to and the participant count -- what a guest's own game needs to run it too.
 void NotePartnerBoss(int32_t active, int32_t phase, int32_t areaIndex, int32_t participants);
@@ -206,6 +207,7 @@ void SetGuestLiftFix(bool on);
 // A guest's hits on the host's world's characters do not count towards their anger, so an NPC hit
 // a few times still talks (npc_progress.cpp, ini guest_npc_hits_ignored).
 void SetGuestNpcHitsIgnored(bool on);
+void SetNpcEventsAfterTalk(bool on);
 uintptr_t CurrentEventTask();                                           // mp_gates.cpp, 0 outside one
 bool ReadEventTaskKey(uintptr_t task, uint32_t* map, int32_t* event);   // [task+0x28], [[task+8]+0x18]
 // Enemies as the host has them in every map a guest loads (enemy_reconcile.cpp, docs §3.47):
@@ -217,6 +219,7 @@ void EnemyReconcileBeforeArea(void* genMgr, int32_t areaIndex);   // game thread
 void EnemyReconcileAfterArea(void* genMgr, int32_t areaIndex);    // game thread, right after
 void EnemyReconcileNow();                                         // game thread, before the enemy sync is armed
 void ForgetHostEnemyStates(const char* why);                      // game thread: a world reset here, or out of the world
+void ForgetHostEnemyStatesAfterRest(const char* why);             // game thread: the same, and the host's next lists waited out
 void NoteHostEnemyDeadList(int32_t map, uint8_t source, const uint16_t* ids, uint16_t count);      // network thread
 void NoteHostKillCounts(int32_t map, const uint16_t* index, const uint8_t* kills, uint16_t count); // network thread
 // A boss fight that ends while one of the players is down (boss_down.cpp, docs §3.47): the
@@ -248,6 +251,9 @@ void SetTravelPoseFix(bool on);
 // ini flags_carry_home).
 void SetRestReplayFull(bool on);
 void SetFlagsCarryHome(bool on);
+// Game thread, a map of this player's own world being made: the host world's flags written in before
+// that map's event scripts start (player_sync.cpp).
+void CarryHostWorldFlagsHomeNow(const char* why);
 // mp_gates.cpp: the event manager's hold counter (+0x1B4) and the byte it drives, logged as they
 // change (19.09 probe: the host's black screen after making its character).
 void EventViewProbeTick();
@@ -386,6 +392,9 @@ public:
     bool GrantSoapstones();
     void EnableSummoning();
     std::string GetLocalCharacterName();
+    // This player's own name only ([[GMImp+0xA8]+0x114]), "" while the character is not made yet --
+    // never someone else's name from the session (loot_sync.cpp keys its records by it).
+    std::string GetOwnCharacterName();
 
 private:
     PlayerSync() = default;

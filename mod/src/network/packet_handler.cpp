@@ -251,6 +251,7 @@ void PacketHandler::HandlePlayerState(const PlayerStatePacket* packet) {
 
     auto& sessionMgr = DS2Coop::Session::SessionManager::GetInstance();
     sessionMgr.UpdatePlayerHealth(packet->playerId, packet->health, packet->maxHealth);
+    DS2Coop::Sync::NotePartnerStateHp(packet->health, packet->maxHealth);   // death_sync.cpp
 
     auto& playerSync = DS2Coop::Sync::PlayerSync::GetInstance();
     playerSync.ApplyRemotePlayerState(packet->playerId,

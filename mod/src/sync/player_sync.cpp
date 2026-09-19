@@ -860,6 +860,42 @@ static bool FlagTablesSettling(ULONGLONG Now) {
     return Now < s_quietUntil;
 }
 
+// A character's own making at the crones' (m10_02 event 16000): the dialogue flags, "made" (102000015)
+// and the two written at its end. Carried home only by a character that has a name -- one that never made
+// itself in the host's world must still be offered the making at home.
+bool CharacterMakingFlag(uint32_t Id) {
+    return (Id >= 102000010 && Id <= 102000015) || Id == 105501 || Id == 106100;
+}
+
+// Every bit set in the host world's last settled table and clear in Current, written into this player's
+// table (at most Limit of them). Caller holds g_flagSyncMutex.
+size_t CarryHomeLocked(std::map<uint32_t, std::vector<uint8_t>>* Current, size_t Limit, size_t* Missing,
+                       size_t* Groups) {
+    const bool Made = !PlayerSync::GetInstance().GetOwnCharacterName().empty();
+    size_t Written = 0;
+    for (const auto& G : g_hostWorldFlags) {
+        auto Home = Current->find(G.first);
+        if (Home == Current->end() || Home->second.size() != G.second.size()) continue;
+        ++*Groups;
+        for (size_t I = 0; I < G.second.size(); ++I) {
+            const uint8_t Absent = static_cast<uint8_t>(G.second[I] & ~Home->second[I]);
+            if (!Absent) continue;
+            for (int Bit = 0; Bit < 8; ++Bit) {
+                if (!(Absent & (1 << Bit))) continue;
+                const uint32_t Id = G.first * 10000 + static_cast<uint32_t>(I) * 8 + (7 - Bit);
+                if (!Made && CharacterMakingFlag(Id)) continue;
+                ++*Missing;
+                if (Written >= Limit) continue;
+                WriteFlagQuiet(Id, true);
+                Home->second[I] |= static_cast<uint8_t>(1 << Bit);
+                AbsorbIntoBaseline(Id, true);
+                ++Written;
+            }
+        }
+    }
+    return Written;
+}
+
 void FlagSyncTick() {
     const FlagSyncMode Mode = static_cast<FlagSyncMode>(g_flagSyncMode.load());
     if (Mode == FlagSyncMode::Off) return;
@@ -979,27 +1015,8 @@ void FlagSyncTick() {
                 g_carryHomePending = true;
             }
         } else if (Join < 0 && !Settling && g_carryHomePending) {
-            constexpr size_t kCarryPerPass = 400;
-            size_t Written = 0, Missing = 0, Groups = 0;
-            for (const auto& G : g_hostWorldFlags) {
-                auto Home = Current.find(G.first);
-                if (Home == Current.end() || Home->second.size() != G.second.size()) continue;
-                ++Groups;
-                for (size_t I = 0; I < G.second.size(); ++I) {
-                    const uint8_t Absent = static_cast<uint8_t>(G.second[I] & ~Home->second[I]);
-                    if (!Absent) continue;
-                    for (int Bit = 0; Bit < 8; ++Bit) {
-                        if (!(Absent & (1 << Bit))) continue;
-                        ++Missing;
-                        if (Written >= kCarryPerPass) continue;
-                        const uint32_t Id = G.first * 10000 + static_cast<uint32_t>(I) * 8 + (7 - Bit);
-                        WriteFlagQuiet(Id, true);
-                        Home->second[I] |= static_cast<uint8_t>(1 << Bit);
-                        AbsorbIntoBaseline(Id, true);
-                        ++Written;
-                    }
-                }
-            }
+            size_t Missing = 0, Groups = 0;
+            const size_t Written = CarryHomeLocked(&Current, 400, &Missing, &Groups);
             if (Missing <= Written) {
                 g_carryHomePending = false;
                 g_hostWorldFlags.clear();
@@ -3550,6 +3567,7 @@ bool PlayerSync::Initialize() {
         DS2Coop::Sync::SetRestReplayFull(Cfg.rest_replay_full);
         DS2Coop::Sync::SetFlagsCarryHome(Cfg.flags_carry_home);
         DS2Coop::Sync::SetGuestNpcHitsIgnored(Cfg.guest_npc_hits_ignored);
+        DS2Coop::Sync::SetNpcEventsAfterTalk(Cfg.npc_events_after_talk);
         DS2Coop::Sync::SetChestLidsReconcile(Cfg.chest_lids_reconcile);
         DS2Coop::Sync::InstallBossArena(Cfg.boss_guest_starts);
         DS2Coop::Sync::InstallFarDeathCamera(Cfg.far_death_camera);
@@ -3759,6 +3777,25 @@ namespace DS2Coop::Sync {
 
 void SetGuestKillCounts(bool On) {
     g_guestKillCounts.store(On);
+}
+
+// The first map of this player's own world after the host's: the carried flags go in while the map is
+// being made, before its event scripts look at them (19.09: carried at 21:24:33, eight seconds after
+// Things Betwixt had loaded at home -- the crones' making (event 16000) had already read "not made"
+// (102000015) and offered the name, class and gift again at 21:25:04, and the gift was given twice).
+// Nothing is marked done here: the regular pass after the tables settle finishes the job.
+void CarryHostWorldFlagsHomeNow(const char* Why) {
+    if (!g_carryHomeOn.load() || !g_carryHomePending || ReadJoinCtrlState() == 7) return;
+    std::lock_guard<std::mutex> Lock(g_flagSyncMutex);
+    if (!g_carryHomePending || g_hostWorldFlags.empty()) return;
+    auto Current = CaptureFlags();
+    if (Current.empty()) return;
+    size_t Missing = 0, Groups = 0;
+    const size_t Written = CarryHomeLocked(&Current, 4000, &Missing, &Groups);
+    if (Written) {
+        LOG_INFO("[FLAGSYNC] %s: %zu flag(s) of the host's world written into my own before its scripts start "
+                 "(%zu groups compared)", Why, Written, Groups);
+    }
 }
 
 void SetFlagsCarryHome(bool On) {
@@ -4889,4 +4926,15 @@ void PlayerSync::EnableSummoning() {
 
 std::string PlayerSync::GetLocalCharacterName() {
     return ReadCharacterName();
+}
+
+std::string PlayerSync::GetOwnCharacterName() {
+    uintptr_t Gm = 0, Gdm = 0;
+    if (!Memory::Read<uintptr_t>(reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr)) + 0x16148F0, &Gm) || !Gm ||
+        !Memory::Read<uintptr_t>(Gm + 0xA8, &Gdm) || !Gdm) {
+        return "";
+    }
+    wchar_t Name[32] = {};
+    if (!TryReadNameBuffer(Gdm + 0x114, Name, 31) || Name[0] == 0) return "";
+    return WcharToUtf8(Name);
 }

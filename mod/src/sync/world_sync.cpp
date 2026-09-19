@@ -140,7 +140,7 @@ void __fastcall RestResetDetour(void* A, void* B, void* C, void* D) {
     g_lastResetAt.store(GetTickCount64());
     g_lastWasReplay.store(false);
     ForgetGuestDropRolls();   // respawned enemies can drop again
-    ForgetHostEnemyStates("a rest here respawned the enemies");
+    ForgetHostEnemyStatesAfterRest("a rest here respawned the enemies");
     if (!g_enabled.load() || !HavePartner()) return;
     if (!InSharedWorld()) {
         LOG_INFO("[WORLD] rested in my own world while a guest of the lobby -- that is not the host's world, "
@@ -219,7 +219,7 @@ void __fastcall GenUpdateDetour(void* Manager, float* Dt) {
             g_lastResetAt.store(GetTickCount64());
             g_lastWasReplay.store(true);
             ForgetGuestDropRolls();
-            ForgetHostEnemyStates("the partner's rest respawned the enemies here");
+            ForgetHostEnemyStatesAfterRest("the partner's rest respawned the enemies here");
             LOG_INFO("[WORLD] %s rested -- the world was reset here too", From.c_str());
             UI::Overlay::GetInstance().ShowNotification(
                 UI::Format(UI::Tr("%s rested at a bonfire \xE2\x80\x94 enemies are back",

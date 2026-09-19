@@ -422,6 +422,8 @@ void SeamlessCoopMod::LoadConfig() {
                     m_config.flags_carry_home = (value == "true" || value == "1");
                 } else if (key == "guest_npc_hits_ignored") {
                     m_config.guest_npc_hits_ignored = (value == "true" || value == "1");
+                } else if (key == "npc_events_after_talk") {
+                    m_config.npc_events_after_talk = (value == "true" || value == "1");
                 } else if (key == "chest_lids_reconcile") {
                     m_config.chest_lids_reconcile = (value == "true" || value == "1");
                 } else if (key == "boss_guest_starts") {
@@ -521,6 +523,7 @@ void SeamlessCoopMod::SaveConfig() {
         configFile << "rest_replay_full=" << (m_config.rest_replay_full ? "true" : "false") << "\n";
         configFile << "flags_carry_home=" << (m_config.flags_carry_home ? "true" : "false") << "\n";
         configFile << "guest_npc_hits_ignored=" << (m_config.guest_npc_hits_ignored ? "true" : "false") << "\n";
+        configFile << "npc_events_after_talk=" << (m_config.npc_events_after_talk ? "true" : "false") << "\n";
         configFile << "chest_lids_reconcile=" << (m_config.chest_lids_reconcile ? "true" : "false") << "\n";
         configFile << "boss_guest_starts=" << (m_config.boss_guest_starts ? "true" : "false") << "\n";
         configFile << "far_death_camera=" << (m_config.far_death_camera ? "true" : "false") << "\n";
