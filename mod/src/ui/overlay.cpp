@@ -50,6 +50,8 @@ namespace DS2Coop::UI {
 
 namespace {
 
+constexpr double kLeaveArmSeconds = 1.5;   // "Leave the lobby" after the lobby page has been up this long
+
 // ---- addresses to share ------------------------------------------------------
 
 // As Unicode: the connection report is Russian, and CF_TEXT would hand the
@@ -250,7 +252,10 @@ void Overlay::Render() {
 // Window
 // ============================================================================
 void Overlay::RenderMenu() {
-    if (!m_visible) m_capturingKey = false;
+    if (!m_visible) {
+        m_capturingKey = false;
+        m_lobbyAction = LobbyAction::None;   // a lobby asked for and then closed on is not made later
+    }
     m_menuAnim = Kit::Approach(m_menuAnim, m_visible ? 1.0f : 0.0f, m_visible ? 7.0f : 9.0f);
     if (m_menuAnim <= 0.001f) return;
 
@@ -300,6 +305,16 @@ void Overlay::RenderMenu() {
         if (Kit::Tabs("tabs", TabNames, 2, m_tab)) m_capturingKey = false;
         ImGui::Dummy(ImVec2(0.0f, 2.0f * S));
 
+        const bool LobbyUp = SessionManager::GetInstance().IsActive();
+        if (m_tab != 0 || m_page == Page::NetCheck || !LobbyUp) {
+            m_sessionPageSince = -1.0;   // the lobby page is not up: "Leave" waits again when it comes
+        }
+        // A lobby asked for is made only from the form it was asked on: left with "Back" or another tab
+        // before its frames were up, it would have fired on the next visit, with whatever the form held then.
+        const bool FormOfAction = m_tab == 0 && !LobbyUp &&
+            ((m_page == Page::Host && m_lobbyAction == LobbyAction::Create) ||
+             (m_page == Page::Join && m_lobbyAction == LobbyAction::Join));
+        if (!FormOfAction) m_lobbyAction = LobbyAction::None;
         if (m_tab == 1) {
             RenderSettingsPage();
         } else if (m_page == Page::NetCheck) {
@@ -446,7 +461,15 @@ void Overlay::RenderHostPage() {
                    Kit::Col::TextFaint);
     ImGui::Dummy(ImVec2(0.0f, 2.0f * S));
 
-    if (Kit::Button(Tr("Create lobby", "Создать лобби"), Kit::ButtonKind::Primary, -1.0f, m_inputPassword[0] != '\0')) {
+    const bool Creating = m_lobbyAction == LobbyAction::Create;
+    const char* CreateLabel = Creating ? Tr("Creating the lobby\xE2\x80\xA6##create", "Создаём лобби\xE2\x80\xA6##create")
+                                       : Tr("Create lobby##create", "Создать лобби##create");
+    if (Kit::Button(CreateLabel, Kit::ButtonKind::Primary, -1.0f, !Creating && m_inputPassword[0] != '\0')) {
+        m_lobbyAction = LobbyAction::Create;
+        m_lobbyActionFrames = 2;
+    }
+    if (Creating && --m_lobbyActionFrames <= 0) {
+        m_lobbyAction = LobbyAction::None;
         if (SessionManager::GetInstance().CreateSession(m_inputPassword)) {
             ShowNotification(Tr("Lobby created. Waiting for players\xE2\x80\xA6", "Лобби создано. Ждём игроков\xE2\x80\xA6"),
                              5.0f, NotifyKind::Success);
@@ -475,7 +498,15 @@ void Overlay::RenderJoinPage() {
     ImGui::Dummy(ImVec2(0.0f, 2.0f * S));
 
     const bool CanJoin = m_inputIP[0] != '\0' && m_inputPassword[0] != '\0';
-    if (Kit::Button(Tr("Connect", "Подключиться"), Kit::ButtonKind::Primary, -1.0f, CanJoin)) {
+    const bool Joining = m_lobbyAction == LobbyAction::Join;
+    const char* JoinLabel = Joining ? Tr("Connecting\xE2\x80\xA6##connect", "Подключаемся\xE2\x80\xA6##connect")
+                                    : Tr("Connect##connect", "Подключиться##connect");
+    if (Kit::Button(JoinLabel, Kit::ButtonKind::Primary, -1.0f, !Joining && CanJoin)) {
+        m_lobbyAction = LobbyAction::Join;
+        m_lobbyActionFrames = 2;
+    }
+    if (Joining && --m_lobbyActionFrames <= 0) {
+        m_lobbyAction = LobbyAction::None;
         if (SessionManager::GetInstance().JoinSession(m_inputIP, m_inputPassword)) {
             ShowNotification(Tr("Connecting to the host\xE2\x80\xA6", "Подключаемся к хосту\xE2\x80\xA6"), 4.0f, NotifyKind::Info);
             m_page = Page::Home;
@@ -590,7 +621,10 @@ void Overlay::RenderSessionPage() {
                                 "Не удалось выдать \xE2\x80\x94 попробуйте уже в игре."), 4.0f, NotifyKind::Warning);
         }
     }
-    if (Kit::Button(Tr("Leave the lobby", "Покинуть лобби"), Kit::ButtonKind::Danger)) {
+    const double Now = ImGui::GetTime();
+    if (m_sessionPageSince < 0.0) m_sessionPageSince = Now;
+    const bool LeaveArmed = Now - m_sessionPageSince >= kLeaveArmSeconds;
+    if (Kit::Button(Tr("Leave the lobby", "Покинуть лобби"), Kit::ButtonKind::Danger, -1.0f, LeaveArmed)) {
         // Closing the mod's channel alone left the phantom standing in the
         // host's world; the game has to be told as well.
         DS2Coop::Sync::RequestLeaveWorld();

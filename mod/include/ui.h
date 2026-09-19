@@ -85,6 +85,14 @@ private:
     bool  m_focusField = false;
     bool  m_showAddresses = false;
 
+    // A lobby asked for by a button is made two frames later, so the button can say "Creating..."
+    // first; the first lobby of a game still costs a short stop. "Leave the lobby" answers only
+    // once the lobby page has been up a moment: clicks made during that stop landed on it (19.09).
+    enum class LobbyAction { None, Create, Join };
+    LobbyAction m_lobbyAction = LobbyAction::None;
+    int         m_lobbyActionFrames = 0;
+    double      m_sessionPageSince = -1.0;
+
     // Menu key and rebinding. Insert always opens the menu as well, so a key
     // rebound out of reach cannot lock anyone out; Esc closes it.
     bool        m_menuKeyWasDown = false;

@@ -259,6 +259,8 @@ void CarryHostWorldFlagsHomeNow(const char* why);
 void EventViewProbeTick();
 // The partner's copy made again from its new look (partner_look.cpp, travel_sync.cpp, docs §3.51).
 void PartnerLookTick();                                        // game thread: my own look, sent when new
+void InstallLeverProbe();                                      // lever_probe.cpp: map object packets from the partner
+void LeverProbeTick();                                         // game thread: the Majula gate and its levers, logged
 void SetPartnerLookRefresh(bool on);
 void SetPartnerLookSwap(bool on);
 void NotePartnerLook(const uint8_t* look, uint32_t seq);       // network thread: record +0x00..+0x2DB

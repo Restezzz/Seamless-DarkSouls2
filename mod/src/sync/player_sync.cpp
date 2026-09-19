@@ -3503,6 +3503,8 @@ bool PlayerSync::Initialize() {
     if (m_initialized) return true;
 
     LOG_INFO("Initializing player sync...");
+    // Every hook below goes live in one stop of the game's threads, at the end of this function.
+    DS2Coop::Hooks::HookBatch Batch;
 
     g_debugHotkeys = SeamlessCoopMod::GetInstance().GetConfig().debug_hotkeys;
     LOG_INFO("Debug hotkeys (F2-F11, Home, End) %s",
@@ -3589,6 +3591,9 @@ bool PlayerSync::Initialize() {
     // What a join actually needs, captured from a normal summon: the groundwork
     // for entering a world without a sign at all (join_direct.cpp, docs §3.27).
     DS2Coop::Sync::InstallJoinProbe();
+
+    // The lever gate between Majula and the Forest, watched on both sides (lever_probe.cpp).
+    DS2Coop::Sync::InstallLeverProbe();
 
     // ... once the world it joined has finished putting those NPCs in at all
     // (MpActiveHook above, ini npc_spawn).

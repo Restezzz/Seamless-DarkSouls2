@@ -203,6 +203,7 @@ void __fastcall GenUpdateDetour(void* Manager, float* Dt) {
     ChestLidsTick();
     EventViewProbeTick();
     PartnerLookTick();
+    LeverProbeTick();
     if (g_pending.exchange(false) && g_enabled.load() && !g_broken.load()) {
         std::string From;
         {

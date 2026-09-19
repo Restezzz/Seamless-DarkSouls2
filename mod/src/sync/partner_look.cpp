@@ -133,6 +133,16 @@ void SendLook(const uint8_t* Record, uint32_t Seq) {
     Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
 }
 
+// Someone to send to. The handshake flag is set only on a guest ("the host answered"), so on 19.09
+// the host never sent its look and the guest kept the host's copy from before the making; a host
+// has a partner once a guest is in the lobby.
+bool HavePartner() {
+    auto& Lobby = Session::SessionManager::GetInstance();
+    if (!Lobby.IsActive()) return false;
+    if (Lobby.IsHost()) return Lobby.GetPlayers().size() >= 2;
+    return Network::PeerManager::GetInstance().IsHandshakeConfirmed();
+}
+
 } // namespace
 
 void PartnerLookTick() {
@@ -142,10 +152,7 @@ void PartnerLookTick() {
     const ULONGLONG Now = GetTickCount64();
     if (Now - s_at < kBuildEveryMs) return;
     s_at = Now;
-    auto& Peers = Network::PeerManager::GetInstance();
-    if (!Session::SessionManager::GetInstance().IsActive() || !Peers.IsConnected() || !Peers.IsHandshakeConfirmed()) {
-        return;
-    }
+    if (!HavePartner()) return;
     if (!ReadyToBuildSafe() || PlayerSync::GetInstance().GetOwnCharacterName().empty()) return;
     alignas(16) static uint8_t s_record[kRecordSize];
     if (!BuildOwnRecordSafe(s_record)) {
@@ -154,13 +161,17 @@ void PartnerLookTick() {
     }
     if (AllZero(s_record + 0x18C, 0xA2) || !*reinterpret_cast<const uint16_t*>(s_record + 0x29C)) return;
     const uint32_t Hash = LookHash(s_record);
-    if (Hash == s_hash && Now - s_sentAt < kResendMs) return;
-    if (Hash != s_hash) {
-        LOG_INFO("[LOOK] my character's look (name, face, attributes) is new -- sent to the partner (#%u)", s_seq + 1);
+    const bool IsNew = Hash != s_hash;
+    if (!IsNew && Now - s_sentAt < kResendMs) return;
+    // A resend keeps its number: the partner drops a number it already has, and a new one would be
+    // a new look to compare (19.09, a line every 20 s on the host).
+    if (IsNew) {
+        ++s_seq;
+        LOG_INFO("[LOOK] my character's look (name, face, attributes) is new -- sent to the partner (#%u)", s_seq);
     }
     s_hash = Hash;
     s_sentAt = Now;
-    SendLook(s_record, ++s_seq);
+    SendLook(s_record, s_seq);
 }
 
 void SetPartnerLookRefresh(bool On) {

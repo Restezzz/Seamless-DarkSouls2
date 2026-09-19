@@ -78,9 +78,21 @@ Fixes for the two reports of 17.09 and the answers to the 0.2.1 checklist. Part 
   name and save slot.
   После создания персонажа напарник видит его ник над полоской, внешность и настоящую полоску хп без нового призыва:
   копия напарника делается заново по новому облику. Записи сундуков и подобранного ведутся по имени и слоту сохранения.
+- The first lobby of a game is created or joined without the game standing still for seconds (the mod's hooks go
+  live at once); the lobby buttons say what they are doing, and "Leave the lobby" does not take a click made while
+  the lobby was being made. The host's look reaches the guest after the characters are made, too.
+  Первое лобби за игру создаётся и подключается без многосекундного зависания (перехваты мода включаются разом);
+  кнопки лобби пишут, что делают, а «Покинуть лобби» не ловит клик, сделанный, пока лобби создавалось. Облик хоста
+  после создания персонажей тоже доходит до гостя.
+- No flat white wall for a guest at a map border (Majula and the Forest at the lever gate): a fog the doors open is
+  cleared on the guest's side too. The lever gate works from the Forest side for a guest who joined a host standing
+  in the Forest: a guest runs the events of every map it has loaded.
+  У гостя нет плоской белой стены на границе карт (Маджула и Лес у ворот с рычагом): туман, который двери открывают,
+  убирается и у гостя. Ворота с рычагом работают со стороны Леса у гостя, вошедшего к хосту в Лесу: гость выполняет
+  события всех загруженных карт.
 
-Both players need 0.2.2: three new packets between the players.
-Нужна 0.2.2 у обоих: три новых пакета между игроками.
+Both players need 0.2.2: six new packets between the players.
+Нужна 0.2.2 у обоих: шесть новых пакетов между игроками.
 
 ## 0.2.1 — 2026-09-17
 

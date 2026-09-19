@@ -34,6 +34,12 @@ public:
     bool EnableHooks();
     bool DisableHooks();
 
+    // Hooks installed on this thread between BeginBatch and EndBatch go live together at EndBatch.
+    // MinHook stops every thread of the game for each hook it switches on, and the first lobby
+    // installs about a hundred: 4 s of a frozen game after "Create lobby" (19.09).
+    void BeginBatch();
+    void EndBatch();
+
 private:
     HookManager() = default;
     ~HookManager() = default;
@@ -41,6 +47,16 @@ private:
     HookManager& operator=(const HookManager&) = delete;
 
     bool m_initialized = false;
+    std::atomic<uint32_t> m_batchQueued{ 0 };
+};
+
+// The hooks installed in this scope go live together when it ends.
+class HookBatch {
+public:
+    HookBatch() { HookManager::GetInstance().BeginBatch(); }
+    ~HookBatch() { HookManager::GetInstance().EndBatch(); }
+    HookBatch(const HookBatch&) = delete;
+    HookBatch& operator=(const HookBatch&) = delete;
 };
 
 // ============================================================================

@@ -141,6 +141,10 @@ void HookManager::Shutdown() {
     m_initialized = false;
 }
 
+// How deep this thread is in BeginBatch/EndBatch. Only the thread that opened a batch queues its
+// hooks; one installed meanwhile on another thread goes live at once, as its caller expects.
+static thread_local int t_batchDepth = 0;
+
 bool HookManager::InstallHook(void* targetFunc, void* detourFunc, void** originalFunc) {
     if (!m_initialized) {
         LOG_ERROR("HookManager not initialized");
@@ -153,14 +157,39 @@ bool HookManager::InstallHook(void* targetFunc, void* detourFunc, void** origina
         return false;
     }
 
-    status = MH_EnableHook(targetFunc);
+    const bool Batched = t_batchDepth > 0;
+    status = Batched ? MH_QueueEnableHook(targetFunc) : MH_EnableHook(targetFunc);
     if (status != MH_OK) {
-        LOG_ERROR("MH_EnableHook failed: %s (target: %p)", MH_StatusToString(status), targetFunc);
+        LOG_ERROR("%s failed: %s (target: %p)", Batched ? "MH_QueueEnableHook" : "MH_EnableHook",
+                  MH_StatusToString(status), targetFunc);
         return false;
     }
 
-    LOG_DEBUG("Hook installed at %p", targetFunc);
+    if (Batched) {
+        m_batchQueued.fetch_add(1);
+        LOG_DEBUG("Hook queued at %p", targetFunc);
+    } else {
+        LOG_DEBUG("Hook installed at %p", targetFunc);
+    }
     return true;
+}
+
+void HookManager::BeginBatch() {
+    ++t_batchDepth;
+}
+
+void HookManager::EndBatch() {
+    if (t_batchDepth == 0 || --t_batchDepth > 0) return;
+    const uint32_t Queued = m_batchQueued.exchange(0);
+    if (!Queued || !m_initialized) return;
+    const ULONGLONG Start = GetTickCount64();
+    const MH_STATUS Status = MH_ApplyQueued();
+    if (Status != MH_OK) {
+        LOG_ERROR("MH_ApplyQueued failed: %s (%u hooks queued)", MH_StatusToString(Status), Queued);
+        return;
+    }
+    LOG_INFO("%u hooks went live at once (%llu ms)", Queued,
+             static_cast<unsigned long long>(GetTickCount64() - Start));
 }
 
 bool HookManager::RemoveHook(void* targetFunc) {

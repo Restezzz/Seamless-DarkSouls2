@@ -29,8 +29,10 @@
 // 0x1FD68) and no NPC whose generator waits for its task (exe+0x451A50). In the log,
 // the first talk prompt of a guest alone in Majula came 15 s after the mod's enemy
 // sync pinned +0x19C to that map. So for a guest in the host's world the answer is
-// "yes" for the map it stands in; +0x19C itself is left alone, because incoming
-// packets are routed by it. Same switch as the talk scripts.
+// "yes" -- for the map it stands in up to 0.2.2's sixth build, for every map it has
+// loaded since (a lever gate on a map border, see AreaEventsRunDetour); +0x19C itself
+// is left alone, because incoming packets are routed by it. Same switch as the talk
+// scripts.
 //
 // Characters before the snapshot. A guest's arrival loads the host's map in join
 // state 3 and gets the host's world -- event flags, the enemies' dead-state store
@@ -195,21 +197,45 @@ uint32_t MapNumber(int32_t Raw) {
     return ((R >> 24) & 0xFF) * 1000000u + ((R >> 16) & 0xFF) * 10000u + ((R >> 8) & 0xFF) * 100u + (R & 0xFF);
 }
 
+// True the first time a map's events are let run for this join controller (logged once each).
+bool FirstFreedFor(uintptr_t Ctrl, int32_t Map) {
+    static uintptr_t s_ctrl = 0;
+    static int32_t s_maps[32] = {};
+    static size_t s_count = 0;
+    static std::mutex s_mutex;
+    std::lock_guard<std::mutex> Lock(s_mutex);
+    if (Ctrl != s_ctrl) {
+        s_ctrl = Ctrl;
+        s_count = 0;
+    }
+    for (size_t I = 0; I < s_count; ++I) {
+        if (s_maps[I] == Map) return false;
+    }
+    if (s_count < _countof(s_maps)) s_maps[s_count++] = Map;
+    return true;
+}
+
+// Every map the guest has loaded, not only the one it stands in (20.09): the lever gate between
+// Majula and the Forest is Majula's event 8000, and a guest who joined a host standing in the
+// Forest, standing itself on the Forest side of the gate, had Majula's events held back -- the
+// levers did nothing and the gate stayed shut until it walked into Majula, which the gate did not
+// let it do. A host runs the events of every map it has loaded; so does the guest now.
 uint64_t __fastcall AreaEventsRunDetour(void* Area) {
     const uint64_t Stock = g_areaEventsRun(Area);
     if ((Stock & 0xFF) || !Area || !g_talkScripts.load(std::memory_order_relaxed) || !GuestInALobby()) return Stock;
     uintptr_t Ctrl = 0;
     if (JoinState(&Ctrl) != 7) return Stock;
-    int32_t AreaMap = 0, MyMap = 0;
-    if (!ReadI32(reinterpret_cast<uintptr_t>(Area) + 0x18, &AreaMap) || !ReadLocalMap(&MyMap) || AreaMap != MyMap) {
-        return Stock;
-    }
+    int32_t AreaMap = 0;
+    if (!ReadI32(reinterpret_cast<uintptr_t>(Area) + 0x18, &AreaMap)) return Stock;
     g_eventsFreedCalls.fetch_add(1, std::memory_order_relaxed);
-    if (g_eventsFreedMap.exchange(AreaMap) != AreaMap) {
-        int32_t Pinned = 0;
+    if (FirstFreedFor(Ctrl, AreaMap)) {
+        g_eventsFreedMap.store(AreaMap);
+        int32_t Pinned = 0, MyMap = 0;
         ReadI32(Ctrl + 0x19C, &Pinned);
-        LOG_INFO("[NPC] the events of map %u, where I stand, were held back because the join names map %u -- "
-                 "run here (NPC talk and NPCs that wait for their event)", MapNumber(AreaMap), MapNumber(Pinned));
+        ReadLocalMap(&MyMap);
+        LOG_INFO("[NPC] the events of map %u (I stand in %u) were held back because the join names map %u -- "
+                 "run here, as a host runs every map it has loaded (NPC talk, NPCs that wait for their event, "
+                 "gates and levers)", MapNumber(AreaMap), MapNumber(MyMap), MapNumber(Pinned));
     }
     return Stock | 1;
 }

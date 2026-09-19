@@ -67,6 +67,10 @@ namespace {
 constexpr uint32_t kGameManagerImp = 0x16148F0;   // *(exe+...) = GameManagerImp
 constexpr uint32_t kDoorState      = 0x1D24A0;    // (door) -> state 0..6 in AL
 constexpr uint32_t kResultPost     = 0x192330;    // (EventResultManager, request)
+constexpr uint32_t kIsClient       = 0x5135F0;    // () -> AL: a guest in someone's world (loads GMImp itself, jumps to its vt[0x58])
+constexpr uint32_t kObjStateGet    = 0x3F2D30;    // (door component) -> AL: its map object's state
+constexpr uint32_t kObjStateSet    = 0x3F2C10;    // (door component, state): asks its map object for a state
+constexpr uint8_t  kObjNoFog       = 20;          // the map object state exe+0x1D1F20 asks for an open door
 
 struct CodeSite {
     const char* Label;
@@ -374,6 +378,65 @@ void NoteDoor(uintptr_t Door, uint8_t State) {
     }
 }
 
+// --- the fog plane of a door that is open for a guest ------------------------------
+// The flat white wall with no prompt at the Majula -> Forest border (19.09 and 20.09: "plain white,
+// like fog but flat", only when the host was on the other side of the lever gate). A white door
+// has two halves: its component (the SFX, the prompts) follows the state computed above, but the
+// map object -- the fog plane and its collision, 10 standing, 20 gone, 100 walked through -- is
+// asked for its state by exe+0x1D21A0 only when exe+0x5135F0 says this game is not a guest. On a
+// guest the plane keeps whatever the host last sent for it, and the host sends a map object's
+// state only when it changes (MapStateActPacketReceiver, packets '$'-'''): a border fog the host
+// cleared before the guest came, in a map other than the join map (the Majula side when the host
+// stood in the Forest, the Forest side when it stood in Majula), stayed at the state it loads with,
+// a solid plane without the fog's particles. So with the doors as in a solo game, a door open for
+// the guest clears its own plane, as exe+0x1D1F20 does for a host (docs §3.52).
+bool GameSaysGuestSafe() {
+    __try {
+        if (!*reinterpret_cast<const uintptr_t*>(ExeBase() + kGameManagerImp)) return false;
+        return (reinterpret_cast<uint64_t(__fastcall*)()>(ExeBase() + kIsClient)() & 0xFF) != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// The object's state, then asks for kObjNoFog if it is not there yet; false when unreadable.
+bool ClearFogPlaneSafe(uintptr_t Door, uint8_t* Was) {
+    __try {
+        *Was = static_cast<uint8_t>(reinterpret_cast<uint64_t(__fastcall*)(uintptr_t)>(ExeBase() + kObjStateGet)(Door));
+        if (*Was != kObjNoFog) {
+            reinterpret_cast<void(__fastcall*)(uintptr_t, uint8_t)>(ExeBase() + kObjStateSet)(Door, kObjNoFog);
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// Once per door (game thread only): a plane that cannot take the state would ask every frame.
+bool FirstClearOf(uintptr_t Door) {
+    static uintptr_t s_doors[64] = {};
+    static size_t s_next = 0;
+    for (const uintptr_t Seen : s_doors) {
+        if (Seen == Door) return false;
+    }
+    s_doors[s_next++ % _countof(s_doors)] = Door;
+    return true;
+}
+
+void KeepOpenDoorClear(uintptr_t Door) {
+    if (!GroupPatched(kDoorSites, _countof(kDoorSites)) || !GameSaysGuestSafe()) return;
+    uint8_t Was = kObjNoFog;
+    if (!ClearFogPlaneSafe(Door, &Was) || Was == kObjNoFog || !FirstClearOf(Door)) return;
+    DoorInfo Info{};
+    float At[3] = {}, Me[3] = {};
+    const bool Known = ReadDoor(Door, &Info);
+    const bool Where = ReadDoorAndMeSafe(Door, At, Me);
+    LOG_INFO("[TRAVEL] door %p (kind %u, flag %u) is open for me but its fog plane stood at object state %u -- "
+             "cleared (%u), as the game does for a host; door at (%.1f, %.1f, %.1f)",
+             reinterpret_cast<void*>(Door), Known ? Info.Kind : 0xFFu, Known ? Info.Flag : 0u, Was, kObjNoFog,
+             Where ? At[0] : 0.0f, Where ? At[1] : 0.0f, Where ? At[2] : 0.0f);
+}
+
 // In the host's world: the join controller ([[netRoot+0x18]+0x40],
 // NetSummonJoinMultiplayCtrl) is in state 7.
 bool IsGuestInWorld() {
@@ -415,6 +478,7 @@ uint64_t __fastcall DoorStateDetour(void* Door) {
             }
         }
     }
+    if (static_cast<uint8_t>(Result) == 0) KeepOpenDoorClear(reinterpret_cast<uintptr_t>(Door));
     NoteDoor(reinterpret_cast<uintptr_t>(Door), static_cast<uint8_t>(Result));
     NotePhantomId();
     return Result;
