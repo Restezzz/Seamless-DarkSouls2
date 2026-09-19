@@ -103,6 +103,8 @@ enum class PacketType : uint8_t {
     // The sender's own character as the game builds it for a summon, record +0x00..+0x2DB
     // (partner_look.cpp): the copy on the other side is made again when its look changed.
     PartnerLook = 0x48,
+    // host -> guest: the states of a map's objects -- gates, bridges, lifts, statues (map_objects.cpp).
+    MapObjectStates = 0x49,
 
     // Custom data
     ChatMessage = 0x40,
@@ -249,6 +251,20 @@ struct ChestLidsPacket {
     uint8_t       source;    // 0 loaded on the host, 1 the host's save record
     uint8_t       reserved;
     ChestLidEntry entries[200];
+};
+
+struct MapObjectState {
+    uint32_t id;
+    uint8_t  state;
+};
+
+struct MapObjectStatesPacket {
+    PacketHeader    header;
+    int32_t         map;        // raw map id
+    uint16_t        count;      // entries filled
+    uint8_t         source;     // 0 loaded on the host, 1 the host's save record
+    uint8_t         reserved;
+    MapObjectState  entries[250];
 };
 
 struct PartnerLookPacket {

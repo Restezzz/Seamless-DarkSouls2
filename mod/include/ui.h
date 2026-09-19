@@ -68,6 +68,7 @@ private:
     void RenderSettingsPage();
     void RenderFooter();
     void RenderNotifications();
+    void CloseLobbyOutOfGame();
     void RenderHint();
     void UpdateIdle();
     void UpdateKeyCapture();
@@ -107,6 +108,8 @@ private:
     float  m_anchor[3] = {};
     double m_stillSince = 0.0;
     double m_nextIdleSample = 0.0;
+
+    std::string m_lobbyCharacter;   // name#slot of the character the open lobby belongs to
 
     char m_inputIP[128]       = {0};
     char m_inputPassword[128] = {0};

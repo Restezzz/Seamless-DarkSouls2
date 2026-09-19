@@ -179,7 +179,9 @@ bool ReplayResetSafely() {
         const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(Base + 0x16148F0);
         const uintptr_t GenMgr = Gm ? *reinterpret_cast<const uintptr_t*>(Gm + 0x40) : 0;
         if (GenMgr) reinterpret_cast<void(__fastcall*)(uintptr_t)>(Base + kGenResetAll)(GenMgr);
-        reinterpret_cast<void(__fastcall*)()>(Base + kObjResetAll)();
+        // The map's objects are left alone (21.09, point 11: the host rode the lift up, the guest sat at
+        // a bonfire, and the button stayed pressed -- the replay had put the lift back to how it loads
+        // while the host was standing on it). A rest of one's own still resets them, as the game does.
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -203,7 +205,8 @@ void __fastcall GenUpdateDetour(void* Manager, float* Dt) {
     ChestLidsTick();
     EventViewProbeTick();
     PartnerLookTick();
-    LeverProbeTick();
+    MapStateActTick();
+    MapObjectsTick();
     if (g_pending.exchange(false) && g_enabled.load() && !g_broken.load()) {
         std::string From;
         {

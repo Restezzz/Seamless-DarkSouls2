@@ -16,6 +16,7 @@ namespace DS2Coop::Sync {
 // them is what makes one world out of two. Writes land in the receiving
 // player's save, so this only does anything when flag_sync=on in the ini.
 bool ApplyRemoteEventFlag(uint32_t flagId, bool value);
+void KeepFlagLocal(uint32_t flagId, bool value);   // a flag of my own the partner is not told about
 bool GetLocalPlayerPosition(float& x, float& y, float& z, float& rotY);
 
 // Ask the server for the sign list at the next opportunity, rather than
@@ -207,6 +208,10 @@ void SetGuestLiftFix(bool on);
 // A guest's hits on the host's world's characters do not count towards their anger, so an NPC hit
 // a few times still talks (npc_progress.cpp, ini guest_npc_hits_ignored).
 void SetGuestNpcHitsIgnored(bool on);
+void SetNpcGiftShare(bool on);                 // what an NPC gives goes to the partner as well
+void SetMapObjectStates(bool on);              // map_objects.cpp: the map's objects as the host has them
+void MapObjectsTick();                         // game thread
+void NoteHostMapObjects(int32_t map, uint8_t source, const void* entries, uint16_t count);   // network thread
 void SetNpcEventsAfterTalk(bool on);
 uintptr_t CurrentEventTask();                                           // mp_gates.cpp, 0 outside one
 bool ReadEventTaskKey(uintptr_t task, uint32_t* map, int32_t* event);   // [task+0x28], [[task+8]+0x18]
@@ -259,8 +264,8 @@ void CarryHostWorldFlagsHomeNow(const char* why);
 void EventViewProbeTick();
 // The partner's copy made again from its new look (partner_look.cpp, travel_sync.cpp, docs §3.51).
 void PartnerLookTick();                                        // game thread: my own look, sent when new
-void InstallLeverProbe();                                      // lever_probe.cpp: map object packets from the partner
-void LeverProbeTick();                                         // game thread: the Majula gate and its levers, logged
+void InstallMapStateAct(bool Local);                           // map_state_act.cpp: map object states in a session
+void MapStateActTick();                                        // game thread: the Majula gate and its levers, logged
 void SetPartnerLookRefresh(bool on);
 void SetPartnerLookSwap(bool on);
 void NotePartnerLook(const uint8_t* look, uint32_t seq);       // network thread: record +0x00..+0x2DB

@@ -14,9 +14,15 @@
 // through 0x2014A (exe+0x199CC0 / exe+0x19A3C0) -- ends in exe+0x1AC3D0(inventory,
 // items, count), a jump into ItemGive, called from exactly those three places.
 // Map events run the same commands, so only a give made while a talk is open counts.
-// What a talk gave goes to the partner (packet NpcGift), whose game adds each item
-// only if that player has none of it: asked for on 17.09 -- an item an NPC gives
-// goes to both, unless the other player already has it (a key, the Estus Flask).
+// What a talk gave used to go to the partner as well (packet NpcGift), and on 21.09
+// the user asked for the other way round (point 8): each player talks and gets it
+// itself, "if I got the flask, he does not until he talks to her". That needs the
+// talk's own record to stay with the talker, or the NPC has nothing left to give the
+// second one -- the Emerald Herald gave the guest the flask, the flag reached the
+// host through flag sync, and for the host she had "already given" it. So every flag
+// a talk script (and its own follow-up event) writes here is folded into the flag
+// diff's baseline and never sent (KeepFlagLocal), and the gift packet is off unless
+// ini npc_gift_share says otherwise.
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -114,6 +120,7 @@ using FlagPacketFn  = void(__fastcall*)(uintptr_t session, uint32_t id, char val
 FlagSetFn  g_flagSetOriginal  = nullptr;
 GiveWrapFn g_giveWrapOriginal = nullptr;
 std::atomic<bool>     g_enabled{ true };
+std::atomic<bool>     g_giftShare{ false };   // ini npc_gift_share: what an NPC gives goes to the partner too
 std::atomic<uint32_t> g_talkWrites{ 0 };
 
 // Gifts from the partner, parked by the network thread for the game thread.
@@ -273,6 +280,7 @@ void __fastcall FlagSetDetour(void* Flags, uint32_t Id, char Value) {
                 const int Before = ReadFlagSafe(Flags, Id);
                 bool Threw = false;
                 const bool Changed = WriteFlagRawSafe(Flags, Id, Value, &Threw);
+                KeepFlagLocal(Id, Value != 0);
                 if (g_afterTalkWrites.fetch_add(1) < kTalkWritesLogged) {
                     LOG_INFO("[TALK] an event right after my talk set flag %u = %d, a guest's write the game drops -- "
                              "written here: %s (was %d)", Id, Value ? 1 : 0,
@@ -294,6 +302,12 @@ void __fastcall FlagSetDetour(void* Flags, uint32_t Id, char Value) {
     if ((Ret != kTalkFlagReturn && Ret != kChrTalkFlagReturn) || !g_enabled.load(std::memory_order_relaxed) ||
         !Flags || !TalkOpen() || !GuestInHostWorld()) {
         g_flagSetOriginal(Flags, Id, Value);
+        // The same for a write the game makes itself -- a host's talk, or a flag a guest may write:
+        // the partner is not told, so the NPC still has it to give when the partner talks (point 8).
+        if ((Ret == kTalkFlagReturn || Ret == kChrTalkFlagReturn) && Flags && TalkOpen() &&
+            Session::SessionManager::GetInstance().IsActive()) {
+            KeepFlagLocal(Id, Value != 0);
+        }
         return;
     }
     bool Ok = false;
@@ -310,6 +324,7 @@ void __fastcall FlagSetDetour(void* Flags, uint32_t Id, char Value) {
     const int Before = ReadFlagSafe(Flags, Id);
     bool Threw = false;
     const bool Changed = WriteFlagRawSafe(Flags, Id, Value, &Threw);
+    KeepFlagLocal(Id, Value != 0);   // my talk, my progress: the partner talks for its own
     const int After = ReadFlagSafe(Flags, Id);
     const uint32_t N = g_talkWrites.fetch_add(1) + 1;
     if (N <= kTalkWritesLogged) {
@@ -380,7 +395,8 @@ bool __fastcall GiveWrapDetour(void* Inventory, Network::NpcGiftItem* Items, int
         }
     }
     if (!Given || !Items || (Ret != kGiveItemReturn && Ret != kGiveLotReturnA && Ret != kGiveLotReturnB)) return Given;
-    if (!g_enabled.load(std::memory_order_relaxed) || !Session::SessionManager::GetInstance().IsActive() || !TalkOpen()) {
+    if (!g_enabled.load(std::memory_order_relaxed) || !g_giftShare.load(std::memory_order_relaxed) ||
+        !Session::SessionManager::GetInstance().IsActive() || !TalkOpen()) {
         return Given;
     }
     uintptr_t Own = 0, Bag = 0;
@@ -448,6 +464,13 @@ void ApplyGift(const PendingGift& Gift, uintptr_t Bag) {
 }
 
 } // namespace
+
+void SetNpcGiftShare(bool On) {
+    g_giftShare.store(On);
+    LOG_INFO("[TALK] what an NPC gives goes to the partner as well: %s", On
+             ? "on (npc_gift_share=true)"
+             : "off -- each player gets it from the NPC itself, and a talk's flags stay with the talker");
+}
 
 bool InstallNpcProgress(bool Enabled) {
     static bool Installed = false;

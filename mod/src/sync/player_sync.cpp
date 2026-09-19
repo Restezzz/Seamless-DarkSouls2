@@ -330,6 +330,21 @@ bool RefuseOwnSignTouch(void* IdPtr) {
     return true;
 }
 
+// The bonfire refused while the players are set to fight each other: the game only says "cannot use
+// this bonfire", which tells nobody why (21.09, point 6).
+void TellAboutPvpBonfire() {
+    if (DS2Coop::Sync::GetDamageMode() != 2 || !DS2Coop::Session::SessionManager::GetInstance().IsActive()) return;
+    static std::atomic<ULONGLONG> s_last{ 0 };
+    const ULONGLONG Now = GetTickCount64();
+    if (Now - s_last.load() < 8000) return;
+    s_last.store(Now);
+    DS2Coop::UI::Overlay::GetInstance().ShowNotification(
+        DS2Coop::UI::Tr("A bonfire takes nobody while you are set to fight each other -- turn PvP off in the menu.",
+                        "К костру не сесть, пока стоит режим PvP â выключи его в меню мода."),
+        6.0f, DS2Coop::UI::NotifyKind::Warning);
+    LOG_INFO("[PVP] the bonfire said no while the damage mode is PvP -- told the player to turn it off");
+}
+
 template <int N>
 uint64_t __fastcall ProbeDetour(void* a1, void* a2, void* a3, void* a4) {
     void* Caller = _ReturnAddress();
@@ -337,6 +352,7 @@ uint64_t __fastcall ProbeDetour(void* a1, void* a2, void* a3, void* a4) {
     auto Fn = reinterpret_cast<uint64_t(__fastcall*)(void*, void*, void*, void*)>(g_probes[N].Original);
     const uint64_t Result = Fn(a1, a2, a3, a4);
     LogProbe(N, Caller, Result, a1, a2);
+    if (g_probes[N].Rva == 0x1CB950 && (Result & 0xFF) == 0) TellAboutPvpBonfire();
     return Result;
 }
 
@@ -724,6 +740,10 @@ std::atomic<bool>                        g_carryHomeOn{ true };
 std::map<uint32_t, std::vector<uint8_t>> g_hostWorldFlags;
 bool                                     g_carryHomePending = false;
 
+// Flags of this player's own that the partner is not told about (KeepFlagLocal).
+std::mutex                                   g_localFlagsMutex;
+std::vector<std::pair<uint32_t, bool>>       g_localFlags;
+
 // Fold a value into the baseline so the next diff does not report it as ours.
 void AbsorbIntoBaseline(uint32_t Id, bool Value) {
     const uint32_t Group = Id / 10000;
@@ -938,6 +958,22 @@ void FlagSyncTick() {
             LOG_INFO("[FLAGSYNC] wrote %zu flag(s) from the other player (%zu changed something here, "
                      "%zu in a group this save does not have), %zu still queued",
                      Taken, Written, Foreign, g_pendingRemoteFlags.size());
+        }
+    }
+
+    // My own talk's flags, taken into the baseline before the table is read, so the diff never sees
+    // them as a change worth sending (KeepFlagLocal).
+    {
+        std::vector<std::pair<uint32_t, bool>> Mine;
+        {
+            std::lock_guard<std::mutex> Lock(g_localFlagsMutex);
+            Mine.swap(g_localFlags);
+        }
+        if (!Mine.empty()) {
+            std::lock_guard<std::mutex> Lock(g_flagSyncMutex);
+            if (!g_flagBaseline.empty()) {
+                for (const auto& F : Mine) AbsorbIntoBaseline(F.first, F.second);
+            }
         }
     }
 
@@ -1644,6 +1680,24 @@ const GateSite Sites[] = {
     { "bonfire action dispatch",        0x13F6D7, { 0x74, 0x08 }, { 0x90, 0x90 } },
     { "action blocker at dispatch site", 0x1402D3, { 0x74, 0x08 }, { 0xEB, 0x08 } },
     { "session check in rest routine",   0x1CBADA, { 0x74, 0x50 }, { 0x90, 0x90 } },
+    // *** A door with a key asks the host's inventory, never the guest's. ***
+    //
+    // exe+0x1CCDC0 is the door's action. Before it looks for the key it decides whose inventory may
+    // be looked in at all:
+    //
+    //   exe+0x1CCE6C  CALL exe+0x51B3C0     ; the session's player 0x7F00 -- the host's character
+    //   exe+0x1CCE71  CMP  RAX,RBX          ; is that the one opening the door?
+    //   exe+0x1CCE74  74 06  JZ +0x1CCE7C   ; yes -> its own inventory counts
+    //   exe+0x1CCE76  CMP  byte [RSI+0x38],R14B   ; a session's client?
+    //   exe+0x1CCE7A  75 03  JNZ +0x1CCE7F  ; yes -> nobody's inventory counts
+    //   exe+0x1CCE7C  MOV  R14B,1           ; the key may be looked for
+    //
+    // For a guest that byte is set, so the key in its own bag was never even looked at: the door said
+    // "locked" with the key in hand (21.09, point 31 of the checklist and point 5 of the report).
+    // NOPing this one jump lets the door look in the inventory of whoever is opening it, which is what
+    // it does in a solo game; the refusal message is still shown only to the local player, and the
+    // door's own flag goes to the partner the way it always did (npc_progress.cpp, DoorUnlock).
+    { "door key: whose inventory",       0x1CCE7A, { 0x75, 0x03 }, { 0x90, 0x90 } },
     { "byte [RAX+0x1A] test",            0x3F2536, { 0x74, 0xF6 }, { 0x90, 0x90 } },
     { "helper result test",              0x3F2557, { 0x75, 0xD5 }, { 0x90, 0x90 } },
 };
@@ -3110,6 +3164,21 @@ void RegionCompareStep() {
     g_regionSideA.clear();   // next press starts a fresh pair
 }
 
+// A flag this player just wrote that the partner must not be told about: what an NPC's talk records
+// about itself, and what its own follow-up event sets (21.09, point 8: "let each of us have our own
+// lines -- just make the items go to whoever talks, not only to the first one"). The Emerald Herald
+// gave the guest the flask, that flag reached the host through the diff, and she would not give the
+// host one. Folded into the baseline, it looks like nothing changed here.
+//
+// It is noted under a lock of its own and folded in at the start of the next pass, before the table is
+// captured: the flag setter this is called from runs while the pass can be holding g_flagSyncMutex --
+// every write the game accepts notifies the world's listeners -- and taking that lock here could be
+// taking it twice on one thread.
+void KeepFlagLocal(uint32_t Id, bool Value) {
+    std::lock_guard<std::mutex> Lock(g_localFlagsMutex);
+    if (g_localFlags.size() < 512) g_localFlags.emplace_back(Id, Value);
+}
+
 // Apply a flag that arrived from another player.
 //
 // Writes it into this client's flag table and folds it into the diff baseline
@@ -3570,6 +3639,8 @@ bool PlayerSync::Initialize() {
         DS2Coop::Sync::SetFlagsCarryHome(Cfg.flags_carry_home);
         DS2Coop::Sync::SetGuestNpcHitsIgnored(Cfg.guest_npc_hits_ignored);
         DS2Coop::Sync::SetNpcEventsAfterTalk(Cfg.npc_events_after_talk);
+        DS2Coop::Sync::SetNpcGiftShare(Cfg.npc_gift_share);
+        DS2Coop::Sync::SetMapObjectStates(Cfg.map_object_states);
         DS2Coop::Sync::SetPartnerLookRefresh(Cfg.partner_look_refresh);
         DS2Coop::Sync::SetChestLidsReconcile(Cfg.chest_lids_reconcile);
         DS2Coop::Sync::InstallBossArena(Cfg.boss_guest_starts);
@@ -3592,8 +3663,8 @@ bool PlayerSync::Initialize() {
     // for entering a world without a sign at all (join_direct.cpp, docs §3.27).
     DS2Coop::Sync::InstallJoinProbe();
 
-    // The lever gate between Majula and the Forest, watched on both sides (lever_probe.cpp).
-    DS2Coop::Sync::InstallLeverProbe();
+    // Map objects a session keeps local, and the probe that watches the Majula gate (map_state_act.cpp).
+    DS2Coop::Sync::InstallMapStateAct(SeamlessCoopMod::GetInstance().GetConfig().map_objects_local);
 
     // ... once the world it joined has finished putting those NPCs in at all
     // (MpActiveHook above, ini npc_spawn).

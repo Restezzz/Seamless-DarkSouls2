@@ -32,7 +32,8 @@ add_library(ds2_seamless_coop SHARED
     sync/death_camera.cpp
     sync/travel_sync.cpp
     sync/partner_look.cpp
-    sync/lever_probe.cpp
+    sync/map_state_act.cpp
+    sync/map_objects.cpp
     sync/mp_gates.cpp
     sync/guest_drops.cpp
     utils/logger.cpp

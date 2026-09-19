@@ -363,8 +363,16 @@ bool QueueRecordSafe(uintptr_t List, uint64_t* Result) {
 
 // --- the partner's copy made again from its new look (partner_look.cpp, docs 3.51) -----------------------
 // Things a look changes on the copy: name, face, attributes (its max HP), hollowing.
+// Worth making the copy again for: the partner has a name it did not have (its character was just
+// made), or a different one (it came back on another character). Not a face or a few attributes on
+// their own -- the record a join hands over and the one the partner builds itself differ in small
+// ways, and on 21.09 (point 10) that made the host's copy play the summon rise eight seconds after
+// the guest joined, for nothing.
 bool LookDiffers(const uint8_t* Look, const uint8_t* Kept) {
-    return std::memcmp(Look + 0x29C, Kept + 0x29C, 0x40) != 0 || std::memcmp(Look + 0x18C, Kept + 0x18C, 0xA2) != 0 ||
+    if (std::memcmp(Look + 0x29C, Kept + 0x29C, 0x40) != 0) return true;
+    const bool KeptHasName = *reinterpret_cast<const uint16_t*>(Kept + 0x29C) != 0;
+    if (KeptHasName) return false;
+    return std::memcmp(Look + 0x18C, Kept + 0x18C, 0xA2) != 0 ||
            std::memcmp(Look + 0x250, Kept + 0x250, 11) != 0 || Look[0x230] != Kept[0x230];
 }
 

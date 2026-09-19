@@ -426,6 +426,12 @@ void SeamlessCoopMod::LoadConfig() {
                     m_config.npc_events_after_talk = (value == "true" || value == "1");
                 } else if (key == "partner_look_refresh") {
                     m_config.partner_look_refresh = (value == "true" || value == "1");
+                } else if (key == "map_objects_local") {
+                    m_config.map_objects_local = (value == "true" || value == "1");
+                } else if (key == "npc_gift_share") {
+                    m_config.npc_gift_share = (value == "true" || value == "1");
+                } else if (key == "map_object_states") {
+                    m_config.map_object_states = (value == "true" || value == "1");
                 } else if (key == "chest_lids_reconcile") {
                     m_config.chest_lids_reconcile = (value == "true" || value == "1");
                 } else if (key == "boss_guest_starts") {
@@ -527,6 +533,9 @@ void SeamlessCoopMod::SaveConfig() {
         configFile << "guest_npc_hits_ignored=" << (m_config.guest_npc_hits_ignored ? "true" : "false") << "\n";
         configFile << "npc_events_after_talk=" << (m_config.npc_events_after_talk ? "true" : "false") << "\n";
         configFile << "partner_look_refresh=" << (m_config.partner_look_refresh ? "true" : "false") << "\n";
+        configFile << "map_objects_local=" << (m_config.map_objects_local ? "true" : "false") << "\n";
+        configFile << "npc_gift_share=" << (m_config.npc_gift_share ? "true" : "false") << "\n";
+        configFile << "map_object_states=" << (m_config.map_object_states ? "true" : "false") << "\n";
         configFile << "chest_lids_reconcile=" << (m_config.chest_lids_reconcile ? "true" : "false") << "\n";
         configFile << "boss_guest_starts=" << (m_config.boss_guest_starts ? "true" : "false") << "\n";
         configFile << "far_death_camera=" << (m_config.far_death_camera ? "true" : "false") << "\n";

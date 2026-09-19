@@ -6,12 +6,13 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 Каждая версия лежит на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) двумя
 архивами: `Seamless-DS2-<версия>-host.zip` для хоста и `Seamless-DS2-<версия>-joiner.zip` для друзей.
 
-## 0.2.2 — not released yet / ещё не выпущено
+## 0.3.0 — not released yet / ещё не выпущено
 
-Fixes for the two reports of 17.09 and the answers to the 0.2.1 checklist. Part of it was checked in play on 18.09
-(below); this section is rewritten from the final test's results before the release.
-Исправления по двум отчётам 17.09 и ответам на чек-лист 0.2.1. Часть проверена в игре 18.09 (ниже); перед релизом
-раздел переписывается по итогам финального теста.
+Everything 0.2.2 was going to be and the tests of 18-21.09 on top of it: the number was skipped on the user's word,
+"we go straight to 0.3.0". Part of it was checked in play on 18.09 (below); this section is rewritten from the final
+test's results before the release.
+Всё, что должно было стать 0.2.2, и тесты 18–21.09 сверху: номер пропущен по решению автора — «идём сразу на 0.3.0».
+Часть проверена в игре 18.09 (ниже); перед релизом раздел переписывается по итогам финального теста.
 
 **Checked in play on 18.09 / Проверено в игре 18.09**
 
@@ -91,8 +92,23 @@ Fixes for the two reports of 17.09 and the answers to the 0.2.1 checklist. Part 
   убирается и у гостя. Ворота с рычагом работают со стороны Леса у гостя, вошедшего к хосту в Лесу: гость выполняет
   события всех загруженных карт.
 
-Both players need 0.2.2: six new packets between the players.
-Нужна 0.2.2 у обоих: шесть новых пакетов между игроками.
+- The lever gate between Majula and the Forest opens for a guest every time, from either side and by either player:
+  an object an event keeps out of the network no longer waits for a confirmation it drops. The map's objects stand
+  as the host has them in every map a guest loads -- shortcut bridges, gates, lifts, statues turned with a Fragrant
+  Branch. A door with a key opens for whoever has the key, not only for the host. What an NPC gives goes to each
+  player who talks to it, and a talk's own progress no longer travels to the partner. A lift button is not pressed
+  down for good when the partner rests. A lobby belongs to the character that opened it: it cannot be opened from
+  the menus and closes itself when that character is left. At a bonfire in PvP mode the mod says why it refuses.
+  Ворота с рычагами между Маджулой и Лесом открываются у гостя каждый раз, с любой стороны и от любого игрока:
+  объект, который событие держит вне сети, больше не ждёт подтверждения, которое сам же отбрасывает. Объекты карты
+  у гостя стоят как у хоста на каждой загруженной карте — мосты-шорткаты, ворота, лифты, статуи после ветви былого.
+  Дверь с ключом открывает тот, у кого ключ, а не только хост. Предмет от NPC получает каждый, кто с ним поговорил,
+  а прогресс разговора больше не уходит напарнику. Кнопка лифта не залипает от отдыха напарника. Лобби принадлежит
+  персонажу: без него не создать, а при выходе в меню оно закрывается само. У костра в режиме PvP мод пишет, почему
+  игра не даёт сесть.
+
+Both players need 0.3.0: seven new packets between the players.
+Нужна 0.3.0 у обоих: семь новых пакетов между игроками.
 
 ## 0.2.1 — 2026-09-17
 

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(DS2SeamlessCoop VERSION 0.2.2 LANGUAGES CXX RC)
+project(DS2SeamlessCoop VERSION 0.3.0 LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

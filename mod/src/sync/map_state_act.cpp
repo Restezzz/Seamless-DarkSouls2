@@ -1,6 +1,19 @@
-// Probe (20.09, the lever gate between Majula and the Forest: "the host opened the doors -- they
-// opened for me, but only once; the second time they stayed as they were, and after he opened them
-// I cannot open them myself without joining again"). Nothing here changes the game.
+// Map objects a session keeps local, and the probe that found why (20.09-21.09, the lever gate between
+// Majula and the Forest: "the host opened the doors -- they opened for me, but only once, and after the
+// first pull I cannot pull either lever again").
+//
+// **The fix.** A state a map object enters is held on a guest until the host confirms it: exe+0x240270
+// leaves the current state (+0x1C) alone and writes only the one it is going to (+0x1D) when the caller
+// asks for that (its fourth argument, which the ctrl's own vt[0x20] sets), the new state is of the kind
+// that gets confirmed, and exe+0x247CD0 says this game is a session's client. The confirmation is packet
+// '&' (exe+0x23FD10) -- and an object whose event called 131651(obj, 0) drops every such packet, flag
+// 0x80. Majula's gate event does exactly that (each player keeps its own gate), and the guest's own copy
+// of that event closes the gate again about 14 s after it opened: the gate then sat at "state 30, going
+// to 80" for good, the script waited for a state 10 that could never come, and while it waits it holds
+// both levers' prompts off (flag 0x40 on them). Walking off into the far regions ended the script and
+// reset the gate, which is why it worked once. So for an object that takes no state from the network the
+// fourth argument is cleared here: it changes state at once, as it does for a host (ini
+// map_objects_local).
 //
 // The gate is Majula's event 8000: 0x7FFFFFDC(gate 10043010, lever 10041015 on the Majula side,
 // lever 10041020 on the Forest side, regions 800001, 800002, 800010, 800011). Each game runs its own
@@ -8,13 +21,12 @@
 // no state from the network (131651(gate, 0): StateActCtrl flag 0x80), the levers are not: a lever's
 // state changes go to the partner as map object packets '$' '%' '&' ''' (MapStateActPacketReceiver,
 // exe+0x1F48C0), and a pull by the partner's copy runs here through the action executor. The script
-// waits for a lever in state 74 or 84, asks the gate for 70 (opening), waits for 30 (open), and
-// closes it (80, then 10) when the local player stands in 800001/800002; in 800010/800011 it starts
-// over. Which of these steps stops on the guest the log does not say yet, so this watches the
-// three objects' state machines (StateActCtrl: +0x1C state, +0x1D the one before, +0x1E asked,
-// +0x20 flags -- 0x1 change asked, 0x40 prompts off, 0x80 no network, 0x100/0x200 an action taken
-// and let go, bits 12-25 a sequence number; +0x18 the character using it) and every map object
-// packet from the partner that names one of them (docs §3.52).
+// waits for a lever in state 74 or 84, asks the gate for 70 (opening), waits for 30 (open) and closes it
+// (80, then 10) about 14 s later; in the regions 800010/800011 it starts over. The probe stays: it
+// watches the three objects' state machines (StateActCtrl: +0x1C state, +0x1D the one it is going to,
+// +0x1E asked, +0x20 flags -- 0x1 change asked, 0x40 prompts off, 0x80 no network, 0x100/0x200 an action
+// taken and let go, bits 12-25 a sequence number; +0x18 the character using it) and every map object
+// packet from the partner that names one of them (docs §3.52, §3.53).
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -44,6 +56,9 @@ constexpr uint32_t  kStateComponent = 0x1CA790;   // (object + 0xB8, object) -> 
 constexpr uint32_t  kObjectByHandle = 0x17BD90;   // (u32* handle) -> map object or 0
 constexpr uint32_t  kStateActCtrlVt = 0x10CF668;  // StateActCtrl::vftable
 constexpr uint32_t  kStateActRecv   = 0x1F48C0;   // (receiver, type, data, size, sender)
+constexpr uint32_t  kEnterState    = 0x240270;   // (ctrl, state, notify, confirmed, flag)
+constexpr uint32_t  kSessionClient = 0x247CD0;   // () -> AL: a client of a session (a state change waits)
+constexpr uint32_t  kNoNetworkFlag = 0x80;       // StateActCtrl flag: takes no state from the network
 constexpr uint32_t  kMajula         = 0x0A040000;
 constexpr ULONGLONG kPollMs         = 250;
 constexpr ULONGLONG kCountEveryMs   = 30000;
@@ -71,7 +86,10 @@ std::atomic<uintptr_t> g_objects[kWatchedCount] = {};   // the objects as last f
 std::atomic<uint32_t>  g_packets[4] = {};               // '$' '%' '&' ''' from the partner, any object
 
 using RecvFn = void(__fastcall*)(void*, char, const uint8_t*, uint32_t, void*);
-RecvFn g_recvOriginal = nullptr;
+using EnterFn = void(__fastcall*)(uintptr_t, uint8_t, uint8_t, uint8_t, uint8_t);
+RecvFn  g_recvOriginal = nullptr;
+EnterFn g_enterOriginal = nullptr;
+std::atomic<bool> g_local{ true };   // ini map_objects_local
 
 uintptr_t ExeBase() {
     static const uintptr_t Base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
@@ -163,22 +181,66 @@ void __fastcall StateActRecvDetour(void* Receiver, char Type, const uint8_t* Dat
              HaveAfter ? StepFlags(After.Flags) : 0u, HaveAfter ? SequenceOf(After.Flags) : 0u);
 }
 
+// The ctrl's flags, 0 when this is not a StateActCtrl.
+uint32_t FlagsOfSafe(uintptr_t Ctrl) {
+    __try {
+        if (!Ctrl || *reinterpret_cast<const uintptr_t*>(Ctrl) != ExeBase() + kStateActCtrlVt) return 0;
+        return *reinterpret_cast<const uint32_t*>(Ctrl + 0x20);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+bool SessionClientSafe() {
+    __try {
+        return (reinterpret_cast<uint64_t(__fastcall*)()>(ExeBase() + kSessionClient)() & 0xFF) != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+// An object that takes no state from the network has nobody to confirm its changes, so it makes them
+// here and now, as it does for a host. The fourth argument is all the game weighs besides the state's
+// own kind and being a client, so clearing it is the whole change.
+void __fastcall EnterStateDetour(uintptr_t Ctrl, uint8_t State, uint8_t Notify, uint8_t Confirmed, uint8_t Flag) {
+    if (Confirmed && g_local.load(std::memory_order_relaxed) &&
+        Session::SessionManager::GetInstance().IsActive() && (FlagsOfSafe(Ctrl) & kNoNetworkFlag) &&
+        SessionClientSafe()) {
+        static std::atomic<uint32_t> s_told{ 0 };
+        if (s_told.fetch_add(1) < 20) {
+            LOG_INFO("[MAPOBJ] a map object that takes no state from the network goes to state %u at once -- "
+                     "the change would have waited for a confirmation the object drops (ctrl %p)", State,
+                     reinterpret_cast<void*>(Ctrl));
+        }
+        Confirmed = 0;
+    }
+    g_enterOriginal(Ctrl, State, Notify, Confirmed, Flag);
+}
+
 } // namespace
 
-void InstallLeverProbe() {
+void InstallMapStateAct(bool Local) {
     static bool Installed = false;
+    g_local.store(Local);
     if (Installed) return;
     Installed = true;
     if (!Hooks::HookManager::GetInstance().InstallHook(reinterpret_cast<void*>(ExeBase() + kStateActRecv),
                                                        reinterpret_cast<void*>(&StateActRecvDetour),
                                                        reinterpret_cast<void**>(&g_recvOriginal))) {
-        LOG_WARNING("[LEVER] could not hook exe+0x%X (map object packets) -- the lever probe watches states only",
+        LOG_WARNING("[LEVER] could not hook exe+0x%X (map object packets) -- the probe watches states only",
                     kStateActRecv);
     }
+    if (!Hooks::HookManager::GetInstance().InstallHook(reinterpret_cast<void*>(ExeBase() + kEnterState),
+                                                       reinterpret_cast<void*>(&EnterStateDetour),
+                                                       reinterpret_cast<void**>(&g_enterOriginal))) {
+        LOG_WARNING("[MAPOBJ] could not hook exe+0x%X (a map object entering a state)", kEnterState);
+    }
+    LOG_INFO("[MAPOBJ] a map object that takes no state from the network changes state at once for a guest: %s",
+             Local ? "on" : "off (map_objects_local=false)");
 }
 
 // Game thread, from the enemy generator update.
-void LeverProbeTick() {
+void MapStateActTick() {
     static ULONGLONG s_at = 0, s_countAt = 0;
     static CtrlView s_last[kWatchedCount] = {};
     static bool s_have[kWatchedCount] = {};

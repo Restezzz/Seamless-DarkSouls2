@@ -7,7 +7,7 @@
 namespace DS2Coop {
 
 // Version information
-constexpr const char* MOD_VERSION = "0.2.2";  // keep in step with VERSION and CMakeLists.txt
+constexpr const char* MOD_VERSION = "0.3.0";  // keep in step with VERSION and CMakeLists.txt
 constexpr const char* MOD_NAME = "Dark Souls 2 Seamless Co-op";
 
 // Game version support
@@ -139,6 +139,18 @@ struct ModConfig {
     // character was just made -- and the partner's copy here is made again from it, without a new
     // summon: name over the HP bar, face, the HP bar's max (partner_look.cpp, docs §3.51). On.
     bool partner_look_refresh = true;
+    // A map object whose event says it takes no state from the network (the gate between Majula and
+    // the Forest and about twenty like it) changes state here at once, as it does for a host: a guest's
+    // copy held the change until the host confirmed it, and the confirmation is what the object ignores,
+    // so the gate stuck half closed and its levers stayed off (map_state_act.cpp, docs §3.53). On.
+    bool map_objects_local = true;
+    // An item an NPC gives is handed to the partner as well. Off since 21.09, point 8: the partner
+    // gets it by talking to that NPC itself, and a talk's own flags stay with the talker, so the NPC
+    // still has it to give (npc_progress.cpp). Off.
+    bool npc_gift_share = false;
+    // The map's objects stand as the host has them in every map a guest loads: gates, shortcut
+    // bridges, lifts, statues turned with a Fragrant Branch (map_objects.cpp, docs §3.53). On.
+    bool map_object_states = true;
     // Chests the host has open are opened for a guest in every map it loads -- old chests the host
     // opened long ago could not be opened by the guest at all (chest_lids.cpp, docs §3.47). On.
     bool chest_lids_reconcile = true;

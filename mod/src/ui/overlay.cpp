@@ -52,6 +52,26 @@ namespace {
 
 constexpr double kLeaveArmSeconds = 1.5;   // "Leave the lobby" after the lobby page has been up this long
 
+// A lobby belongs to the character that opened it (21.09, point 7: the guest started a new character
+// under the same name while the host's lobby stood, and the host was left with bonfires it could not
+// travel to). So: no lobby from the menus, and a lobby the character it was opened on has left closes
+// itself. What counts as "left" is another character being loaded (name and save slot), or the game
+// standing outside the world for a long time -- long enough that no loading screen is in question, as
+// a bonfire warp or a death reload can easily take ten seconds.
+constexpr ULONGLONG kOutOfGameCloseMs = 120000;
+
+bool InGameWorld() {
+    __try {
+        const uintptr_t Base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
+        const uintptr_t Gm = *reinterpret_cast<const uintptr_t*>(Base + 0x16148F0);
+        if (!Gm) return false;
+        return *reinterpret_cast<const uintptr_t*>(Gm + 0xD0) != 0 &&
+               *reinterpret_cast<const int32_t*>(Gm + 0x24AC) == 0x1E;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 // ---- addresses to share ------------------------------------------------------
 
 // As Unicode: the connection report is Russian, and CF_TEXT would hand the
@@ -243,9 +263,53 @@ void Overlay::ShowPlayerList() {
 void Overlay::HandleInput() {}   // input is read in PollMenuKey and the WndProc hook
 
 void Overlay::Render() {
+    CloseLobbyOutOfGame();
     RenderHint();
     RenderNotifications();
     RenderMenu();
+}
+
+// The character the lobby was opened on is gone (another character, or the title screen for long
+// enough): the lobby goes with it, or the next character would carry its world -- bonfires, flags,
+// records (point 7).
+void Overlay::CloseLobbyOutOfGame() {
+    static ULONGLONG s_outSince = 0;
+    auto& Mgr = SessionManager::GetInstance();
+    if (!Mgr.IsActive()) {
+        s_outSince = 0;
+        m_lobbyCharacter.clear();
+        return;
+    }
+    const char* Why = nullptr;
+    const ULONGLONG Now = GetTickCount64();
+    if (InGameWorld()) {
+        s_outSince = 0;
+        const std::string Character = DS2Coop::Sync::PlayerSync::GetInstance().GetOwnCharacterKey();
+        if (Character.empty()) return;
+        if (m_lobbyCharacter.empty()) {
+            m_lobbyCharacter = Character;   // the character this lobby belongs to
+            return;
+        }
+        if (m_lobbyCharacter == Character) return;
+        Why = "another character is loaded";
+    } else {
+        if (!s_outSince) {
+            s_outSince = Now;
+            return;
+        }
+        if (Now - s_outSince < kOutOfGameCloseMs) return;
+        s_outSince = 0;
+        Why = "the game has stood outside the world for two minutes";
+    }
+    m_lobbyCharacter.clear();
+    LOG_INFO("[LOBBY] %s -- the lobby of the character that opened it is closed", Why);
+    DS2Coop::Sync::RequestLeaveWorld();
+    Mgr.LeaveSession();
+    DS2Coop::Hooks::ProtobufHooks::SetSeamlessActive(false);
+    m_page = Page::Home;
+    ShowNotification(Tr("You left the character, so the lobby closed. Load a character and open it again.",
+                        "Вы вышли из персонажа \xE2\x80\x94 лобби закрыто. Зайдите за персонажа и создайте его заново."),
+                     6.0f, NotifyKind::Info);
 }
 
 // ============================================================================
@@ -462,9 +526,15 @@ void Overlay::RenderHostPage() {
     ImGui::Dummy(ImVec2(0.0f, 2.0f * S));
 
     const bool Creating = m_lobbyAction == LobbyAction::Create;
+    const bool InGame = InGameWorld();
+    if (!InGame) {
+        Kit::Paragraph(Tr("Load your character first: a lobby belongs to the character that opens it.",
+                          "Сначала зайди за персонажа: лобби принадлежит тому персонажу, который его создал."),
+                       Kit::Col::Amber);
+    }
     const char* CreateLabel = Creating ? Tr("Creating the lobby\xE2\x80\xA6##create", "Создаём лобби\xE2\x80\xA6##create")
                                        : Tr("Create lobby##create", "Создать лобби##create");
-    if (Kit::Button(CreateLabel, Kit::ButtonKind::Primary, -1.0f, !Creating && m_inputPassword[0] != '\0')) {
+    if (Kit::Button(CreateLabel, Kit::ButtonKind::Primary, -1.0f, !Creating && InGame && m_inputPassword[0] != '\0')) {
         m_lobbyAction = LobbyAction::Create;
         m_lobbyActionFrames = 2;
     }
@@ -497,7 +567,13 @@ void Overlay::RenderJoinPage() {
                       "К адресу можно дописать порт: 26.12.34.56:27015."), Kit::Col::TextFaint);
     ImGui::Dummy(ImVec2(0.0f, 2.0f * S));
 
-    const bool CanJoin = m_inputIP[0] != '\0' && m_inputPassword[0] != '\0';
+    const bool InGame = InGameWorld();
+    if (!InGame) {
+        Kit::Paragraph(Tr("Load your character first: a lobby belongs to the character that joins with it.",
+                          "Сначала зайди за персонажа: подключаться нужно уже в игре."),
+                       Kit::Col::Amber);
+    }
+    const bool CanJoin = InGame && m_inputIP[0] != '\0' && m_inputPassword[0] != '\0';
     const bool Joining = m_lobbyAction == LobbyAction::Join;
     const char* JoinLabel = Joining ? Tr("Connecting\xE2\x80\xA6##connect", "Подключаемся\xE2\x80\xA6##connect")
                                     : Tr("Connect##connect", "Подключиться##connect");

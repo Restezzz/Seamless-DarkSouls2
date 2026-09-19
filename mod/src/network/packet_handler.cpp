@@ -139,6 +139,12 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
             NetCheckOnProbe(packet, sender);   // checks the size itself
             break;
 
+        case PacketType::MapObjectStates:
+            if (packet->size >= sizeof(MapObjectStatesPacket)) {
+                const auto* States = reinterpret_cast<const MapObjectStatesPacket*>(packet);
+                DS2Coop::Sync::NoteHostMapObjects(States->map, States->source, States->entries, States->count);
+            }
+            break;
         case PacketType::NpcGift:
             if (packet->size >= sizeof(NpcGiftPacket)) {
                 const auto* Gift = reinterpret_cast<const NpcGiftPacket*>(packet);
