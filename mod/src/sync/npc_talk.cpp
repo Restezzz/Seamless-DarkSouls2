@@ -313,6 +313,53 @@ uint64_t __fastcall PromptAllowedDetour(void* Chr, const uint8_t* Flags) {
     return Answer;
 }
 
+// --- probe: which prompts are offered at all (21.09, the nest in Things Betwixt) ---------------
+// The hatchlings talk to the host and not to the guest, and the guest's log holds no prompt line for
+// the action the host used (0x1B): the prompt was never even asked about, so it was never registered.
+// exe+0x453CE0 is the registration: it refuses when the character's own bit is set in ctrl+0xA0 (the
+// zone-enter answer, exe+0x453760 above), when the action is a bonfire's 0xD/0xE in a session as a
+// guest (patched elsewhere), or for the two special ids 0x1C and 0x27. This writes down every
+// registration attempt of an action this player has not seen yet: the action id, that bit, and what
+// the session looks like. One line per action id, so a busy world costs nothing.
+constexpr uint32_t kRegisterPrompt = 0x453CE0;   // (EventKeyGuideCtrl)
+constexpr uint32_t kActionInGuide  = 0x8C;
+constexpr uint32_t kMaskInGuide    = 0xA0;
+using RegisterPromptFn = void(__fastcall*)(void*);
+void* g_registerPromptOriginal = nullptr;
+
+bool ReadGuideSafe(uintptr_t Guide, int32_t* Action, uint64_t* Mask) {
+    __try {
+        *Action = *reinterpret_cast<const int32_t*>(Guide + kActionInGuide);
+        *Mask = *reinterpret_cast<const uint64_t*>(Guide + kMaskInGuide);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void __fastcall RegisterPromptDetour(void* Guide) {
+    static std::atomic<uint32_t> s_seen[64] = {};
+    static std::atomic<uint32_t> s_count{ 0 };
+    int32_t Action = -1;
+    uint64_t Mask = 0;
+    if (Session::SessionManager::GetInstance().IsActive() &&
+        ReadGuideSafe(reinterpret_cast<uintptr_t>(Guide), &Action, &Mask)) {
+        bool Told = false;
+        const uint32_t N = s_count.load();
+        for (uint32_t I = 0; I < N && I < 64 && !Told; ++I) {
+            Told = s_seen[I].load() == static_cast<uint32_t>(Action);
+        }
+        if (!Told && N < 64) {
+            s_seen[N].store(static_cast<uint32_t>(Action));
+            s_count.store(N + 1);
+            LOG_INFO("[TALK] a prompt for action %d is being offered here (refused-for mask 0x%llX, %s)", Action,
+                     static_cast<unsigned long long>(Mask),
+                     IsGuestInHostWorld() ? "I am a guest in the host's world" : "my own world");
+        }
+    }
+    reinterpret_cast<RegisterPromptFn>(g_registerPromptOriginal)(Guide);
+}
+
 // --- probe: a generated character being taken off the map ---------------------
 // If the NPCs are not simply never put in but put in and then removed, that goes
 // through exe+0x40F300 -> exe+0x415E70([GMImp+0x40], status, 0, 0) ->
@@ -462,6 +509,11 @@ bool InstallNpcTalk() {
         return false;
     }
     LOG_INFO("[TALK] a guest is asked about NPC prompts as a host is (exe+0x453760)");
+    if (Hooks::HookManager::GetInstance().InstallHook(reinterpret_cast<void*>(ExeBase() + kRegisterPrompt),
+                                                      reinterpret_cast<void*>(&RegisterPromptDetour),
+                                                      &g_registerPromptOriginal)) {
+        LOG_INFO("[TALK] watching which prompts are offered at all (exe+0x%X)", kRegisterPrompt);
+    }
     if (Hooks::HookManager::GetInstance().InstallHook(reinterpret_cast<void*>(ExeBase() + kPhantomRow),
                                                       reinterpret_cast<void*>(&PhantomRowDetour),
                                                       &g_phantomRowOriginal)) {
