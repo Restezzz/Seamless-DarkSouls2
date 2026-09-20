@@ -139,6 +139,18 @@ void PacketHandler::HandlePacket(const PacketHeader* packet, const PeerInfo& sen
             NetCheckOnProbe(packet, sender);   // checks the size itself
             break;
 
+        case PacketType::PlayerName: {
+            if (packet->size < sizeof(PlayerNamePacket)) break;
+            const auto* Named = reinterpret_cast<const PlayerNamePacket*>(packet);
+            char Name[32] = {};
+            std::memcpy(Name, Named->name, sizeof(Name) - 1);
+            if (Name[0] && sender.playerName != Name) {
+                LOG_INFO("[NAME] the other player is %s (was %s)", Name, sender.playerName.c_str());
+                PeerManager::GetInstance().SetPeerName(sender.playerId, Name);
+                DS2Coop::Session::SessionManager::GetInstance().UpdatePlayerName(sender.playerId, Name);
+            }
+            break;
+        }
         case PacketType::MapObjectStates:
             if (packet->size >= sizeof(MapObjectStatesPacket)) {
                 const auto* States = reinterpret_cast<const MapObjectStatesPacket*>(packet);

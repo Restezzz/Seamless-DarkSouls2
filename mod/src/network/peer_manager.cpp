@@ -294,6 +294,15 @@ bool PeerManager::SendPacket(const PacketHeader* packet, uint64_t targetPlayerId
     return true;
 }
 
+// The name a peer goes by in notices. The handshake carries it once, and a player who joined before
+// its character existed handed over "Player"; PlayerName packets put the real one in later.
+void PeerManager::SetPeerName(uint64_t playerId, const std::string& name) {
+    std::lock_guard<std::recursive_mutex> lock(m_peersMutex);
+    for (auto& peer : m_peers) {
+        if (peer.playerId == playerId) peer.playerName = name;
+    }
+}
+
 void PeerManager::BroadcastPacket(const PacketHeader* packet) {
     if (!m_initialized || !m_connected || !packet) return;
 

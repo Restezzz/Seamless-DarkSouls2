@@ -340,6 +340,7 @@ the menu key are easier to change in the menu itself.
 | `boss_fog_wait` | `false` | make the boss fog hold a guest back until the other player is inside |
 | `npc_talk` | `true` | a guest can talk to NPCs in the host's world |
 | `npc_progress` | `true` | dialogue progress kept per player, and what an NPC gives goes to each of you |
+| `chain_dll` | empty | another mod's DLL to load with this one (ModEngine from a modpack): put it in the game folder under any name but `dinput8.dll` |
 | `damage_mode` | `off` | damage between players when you host: `off`, `ff` (friendly fire), `pvp` — easier in the lobby menu |
 | `allow_invasions` | `false` | invasions |
 | `language` | `auto` | `auto`, `en` or `ru` |
@@ -368,6 +369,7 @@ the menu key are easier to change in the menu itself.
 | `boss_fog_wait` | `false` | заставить туман босса держать гостя, пока не зайдёт второй |
 | `npc_talk` | `true` | гость может говорить с NPC в мире хоста |
 | `npc_progress` | `true` | прогресс разговоров у каждого свой, и предмет от NPC получает каждый |
+| `chain_dll` | пусто | dll другого мода, которую загрузить вместе с этим (ModEngine из сборки): положи её в папку игры под любым именем, кроме `dinput8.dll` |
 | `damage_mode` | `off` | урон между игроками, когда ты хост: `off`, `ff` (огонь по своим), `pvp` — проще в меню лобби |
 | `allow_invasions` | `false` | вторжения |
 | `language` | `auto` | `auto`, `en` или `ru` |

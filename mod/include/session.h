@@ -62,6 +62,7 @@ public:
     void UpdatePlayerArea(uint64_t playerId, uint32_t onlineAreaId);
     void UpdatePlayerHealth(uint64_t playerId, int32_t health, int32_t maxHealth);
     void UpdatePlayerLevel(uint64_t playerId, uint32_t soulLevel);
+    void UpdatePlayerName(uint64_t playerId, const std::string& name);
     // The local player died / came back: recorded and broadcast to the others.
     void NotifyPlayerDeath(uint64_t playerId);
     void NotifyPlayerRespawn(uint64_t playerId);

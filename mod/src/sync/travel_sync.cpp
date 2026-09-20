@@ -569,6 +569,25 @@ bool NobodyHasJoined() {
     return true;
 }
 
+// A scene is running here: the event manager's hold counter ([[GMImp+0x70]+0x1B4], the one the [VIEW]
+// probe watches) is up while a cutscene holds the world -- the crones' scene at a character's making
+// among them.
+//
+// That is the black screen of 21.09 evening (checklist 12, said twice): both players stood at the
+// crones already joined, so the "nobody has joined" guard below did not apply; the first skipped the
+// scene, its event task said so to the other's, and the second was left in the dark the scene fades
+// out of. While a scene holds this world, the partner's tasks have nothing to say here: each game
+// plays its own copy, and the packets it misses only carry steps its own script takes anyway.
+bool SceneHoldsThisWorld() {
+    uintptr_t Gm = 0, EvMgr = 0;
+    if (!ReadPtr(ExeBase() + kGameManagerImp, &Gm) || !ReadPtr(Gm + 0x70, &EvMgr)) return false;
+    __try {
+        return *reinterpret_cast<const int32_t*>(EvMgr + 0x1B4) > 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 // Probe (19.09, the host's black screen after making its character): which event task a packet
 // 'E'/'F'/'G' moves. The packet names the task by its index in the area of the map exe+0x2C6DE0
 // names (byte 0, [task+0x2C]); the receiver finds the area as exe+0x18A500 does --
@@ -649,6 +668,15 @@ void NoteEventPacket(char Type, const uint8_t* Data, uint32_t Size, bool Dropped
 }
 
 void __fastcall EventPacketsDetour(void* Listener, char Type, uint8_t* Data, uint32_t Size) {
+    if (SceneHoldsThisWorld()) {
+        static std::atomic<uint32_t> s_told{ 0 };
+        const uint32_t N = s_told.fetch_add(1) + 1;
+        if (N <= 5 || N % 200 == 0) {
+            LOG_INFO("[EVENTNET] '%c' from the partner while a scene is playing here -- dropped (%u so far)",
+                     Type, N);
+        }
+        return;
+    }
     if (NobodyHasJoined()) {
         static std::atomic<uint32_t> s_told{ 0 };
         const uint32_t N = s_told.fetch_add(1) + 1;

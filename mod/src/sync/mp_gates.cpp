@@ -315,7 +315,19 @@ uint64_t __fastcall AreaProtectedDetour(void* Table, int32_t Area) {
     const uintptr_t Ret = reinterpret_cast<uintptr_t>(_ReturnAddress()) - ExeBase();
     const bool Start = Ret == kProtectStartRet && t_partnerStart;
     const bool Accept = Ret == kProtectAcceptRet && t_partnerAccept;
-    if (!Start && !Accept) return Stock;
+    // A third caller asks it too, and that one is what kept the guest out on 21.09 evening
+    // (checklist 22): the summon job started and went out -- "the partner's summon start let through"
+    // is in the host's log at 19:58:50 -- and then the accept controller appeared already at state
+    // 0x12 with code 2 and vanished, with the sign quietly gone. Since every player in a lobby is on
+    // the host's own server, where there is nobody to keep out, the protection is answered "not
+    // protected" for every caller while this game hosts a lobby; the return address is logged so the
+    // site can be named. Invaders outside a lobby, and anything with effigy_summon off, keep the
+    // game's own answer.
+    const bool AnyCaller = !Start && !Accept;
+    if (AnyCaller && !(g_effigySummon.load() && Session::SessionManager::GetInstance().IsActive() &&
+                       Session::SessionManager::GetInstance().IsHost())) {
+        return Stock;
+    }
     const ULONGLONG Now = GetTickCount64();
     const bool Say = Now - g_protectLogAt.load() > 10000;
     if (Say) g_protectLogAt.store(Now);
@@ -328,8 +340,9 @@ uint64_t __fastcall AreaProtectedDetour(void* Table, int32_t Area) {
         return Stock;
     }
     if (Say) {
-        LOG_INFO("[GATES] area %d is protected against invaders (effigy) -- the lobby partner's summon %s let through",
-                 Area, Start ? "start" : "arrival");
+        LOG_INFO("[GATES] area %d is protected against invaders (effigy) -- the lobby partner's summon %s let "
+                 "through (asked from exe+0x%llX)", Area,
+                 Start ? "start" : Accept ? "arrival" : "step", static_cast<unsigned long long>(Ret));
     }
     return Stock & ~static_cast<uint64_t>(0xFF);
 }

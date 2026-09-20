@@ -96,11 +96,62 @@ bool ReadLocalRawMapSafe(int32_t* Out) {
     }
 }
 
+// A bonfire this player lights while in the host's world is written into the session set, and a load
+// empties that set and fills it from the host's list again: on 21.09 evening a bonfire lit at 19:06:43
+// had to be lit a second time after a rejoin (report 2). So it goes into this player's own set as
+// well, which is its own save, and it is kept for the run so it can be put back into the session set
+// at every load beside the host's (death_sync.cpp asks for the list).
+constexpr uintptr_t kOwnByteInRecord = 2;   // record + 2: the save's own set (+3 is the session's)
+constexpr uint32_t  kJoinCtrlVtable  = 0x10D7BD8;   // NetSummonJoinMultiplayCtrl
+
+bool InHostWorldSafe() {
+    __try {
+        const uintptr_t Root = *reinterpret_cast<const uintptr_t*>(ExeBase() + kNetRoot);
+        const uintptr_t Mp = Root ? *reinterpret_cast<const uintptr_t*>(Root + 0x18) : 0;
+        const uintptr_t Ctrl = Mp ? *reinterpret_cast<const uintptr_t*>(Mp + 0x40) : 0;
+        if (!Ctrl || *reinterpret_cast<const uintptr_t*>(Ctrl) != ExeBase() + kJoinCtrlVtable) return false;
+        return *reinterpret_cast<const int32_t*>(Ctrl + 0xF8) == 7;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+constexpr int       kMineMax         = 64;
+
+std::mutex g_mineMutex;
+uint16_t   g_mine[kMineMax] = {};
+int        g_mineCount = 0;
+
+bool LightInOwnSetSafe(void* List, int32_t Id) {
+    __try {
+        const uintptr_t Record = reinterpret_cast<uintptr_t(__fastcall*)(void*, int32_t)>(
+            ExeBase() + kRecordFind)(List, Id);
+        if (!Record) return false;
+        auto* Own = reinterpret_cast<uint8_t*>(Record + kOwnByteInRecord);
+        if (*Own & 1) return false;
+        *Own |= 1;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
 void __fastcall LitSetDetour(void* List, int32_t Id, uint8_t Local) {
     g_litSetOriginal(List, Id, Local);
     if (!Local || !Session::SessionManager::GetInstance().IsActive()) return;
     int32_t Map = 0;
     ReadLocalRawMapSafe(&Map);
+    if (InHostWorldSafe() && List) {
+        {
+            std::lock_guard<std::mutex> Mine(g_mineMutex);
+            bool Have = false;
+            for (int I = 0; I < g_mineCount; ++I) Have = Have || g_mine[I] == static_cast<uint16_t>(Id);
+            if (!Have && g_mineCount < kMineMax) g_mine[g_mineCount++] = static_cast<uint16_t>(Id);
+        }
+        if (LightInOwnSetSafe(List, Id)) {
+            LOG_INFO("[BONFIRE] bonfire %d lit in the host's world is lit in my own set too -- it stays lit at "
+                     "home and after a rejoin", Id);
+        }
+    }
     std::lock_guard<std::mutex> Lock(g_mutex);
     if (g_ownCount < kQueueSize) g_own[g_ownCount++] = Lit{ Id, Map, GetTickCount64(), {} };
 }
@@ -250,6 +301,19 @@ void BonfireLitGameTick() {
         std::lock_guard<std::mutex> Lock(g_mutex);
         for (int I = 0; I < KeepCount && g_partnerCount < kQueueSize; ++I) g_partner[g_partnerCount++] = Keep[I];
     }
+}
+
+// The bonfires this player has lit in the host's world this run, for the refill of the session set
+// after a load (death_sync.cpp). Their flags are "lit", nothing else.
+int MyLitBonfiresInHostWorld(uint16_t* Ids, uint8_t* Flags, int Max) {
+    std::lock_guard<std::mutex> Lock(g_mineMutex);
+    int N = 0;
+    for (int I = 0; I < g_mineCount && N < Max; ++I) {
+        Ids[N] = g_mine[I];
+        Flags[N] = 1;
+        ++N;
+    }
+    return N;
 }
 
 } // namespace DS2Coop::Sync

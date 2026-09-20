@@ -30,7 +30,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <set>
+#include <string>
 
 using namespace DS2Coop::Utils;
 
@@ -148,6 +152,46 @@ bool CondMarked(uintptr_t Cond) {
     return false;
 }
 
+// Boss starts learned in earlier runs (kBossFile, one "map event" pair per line). A boss start is
+// recognised for good the first time either player's script asks for that fight, and 21.09 evening
+// showed what that is worth: the Pursuer was woken by the guest walking in on the second attempt
+// (19:53:07), while the first attempt at every boss still waited for the host. Kept in a file so the
+// second attempt does not have to be in the same sitting.
+const wchar_t* const kBossFile = L"ds2_coop_bosses.txt";
+std::mutex     g_fileMutex;
+std::set<uint64_t> g_fromFile;
+bool           g_fileRead = false;
+
+void ReadMarksFile() {
+    std::lock_guard<std::mutex> Lock(g_fileMutex);
+    if (g_fileRead) return;
+    g_fileRead = true;
+    FILE* F = nullptr;
+    if (_wfopen_s(&F, kBossFile, L"r") != 0 || !F) return;
+    char Line[128] = {};
+    while (fgets(Line, sizeof(Line), F)) {
+        unsigned Map = 0;
+        int Event = 0;
+        if (sscanf_s(Line, "%x %d", &Map, &Event) == 2 && Map && Event) {
+            g_fromFile.insert((static_cast<uint64_t>(Map) << 32) | static_cast<uint32_t>(Event));
+        }
+    }
+    fclose(F);
+    if (!g_fromFile.empty()) {
+        LOG_INFO("[BOSS] %zu boss start(s) remembered from earlier runs (%ls)", g_fromFile.size(), kBossFile);
+    }
+}
+
+void WriteMarkToFile(uint32_t Map, int32_t Event) {
+    std::lock_guard<std::mutex> Lock(g_fileMutex);
+    const uint64_t Key = (static_cast<uint64_t>(Map) << 32) | static_cast<uint32_t>(Event);
+    if (!g_fromFile.insert(Key).second) return;
+    FILE* F = nullptr;
+    if (_wfopen_s(&F, kBossFile, L"a") != 0 || !F) return;
+    fprintf(F, "%08X %d\n", Map, Event);
+    fclose(F);
+}
+
 void Mark(uint64_t Key, const char* How, int32_t Event, uint32_t Map, uint32_t Regions) {
     if (Marked(Key)) return;
     const uint32_t N = g_markCount.load();
@@ -156,6 +200,49 @@ void Mark(uint64_t Key, const char* How, int32_t Event, uint32_t Map, uint32_t R
     g_markCount.store(N + 1, std::memory_order_release);
     LOG_INFO("[BOSS] event %d of map %08X is a boss start (%s%u region(s)) -- a guest standing in them wakes the "
              "boss here too", Event, Map, How, Regions);
+}
+
+// Everything this game has ever learned, put back in as the conditions register again.
+void MarkFromFile(uint32_t Map, int32_t Event) {
+    ReadMarksFile();
+    const uint64_t Key = (static_cast<uint64_t>(Map) << 32) | static_cast<uint32_t>(Event);
+    bool Known = false;
+    {
+        std::lock_guard<std::mutex> Lock(g_fileMutex);
+        Known = g_fromFile.count(Key) != 0;
+    }
+    if (Known) Mark(Key, "remembered from an earlier run, ", Event, Map, 0);
+}
+
+// Probe: why the four-condition shape of a boss start is not being found (21.09 evening -- not one
+// line of it in either log, while the host's own start marked four events). Every "I am the host"
+// condition is written down with what its state holds beside it, once per state.
+void LogHostBranchShape(const Reg& Host1) {
+    static std::atomic<uint32_t> s_told{ 0 };
+    static std::atomic<uintptr_t> s_envs[16] = {};
+    const uintptr_t Env = Host1.Env;
+    for (const std::atomic<uintptr_t>& Seen : s_envs) {
+        if (Seen.load() == Env) return;
+    }
+    const uint32_t N = s_told.fetch_add(1);
+    if (N >= 16) return;
+    s_envs[N].store(Env);
+    char Line[256] = {};
+    int At = 0;
+    for (const Reg& R : t_ring) {
+        if (R.Env != Env || !R.Cond || R.Kind == 0) continue;
+        At += _snprintf_s(Line + At, sizeof(Line) - At, _TRUNCATE, "%s%s(slot %u%s)", At ? ", " : "",
+                          R.Kind == 1 ? "region" : "IsHost", R.Slot,
+                          R.Kind == 1 ? (R.Mode == 1 ? ", inside" : ", other mode") : "");
+        if (At <= 0 || At > 200) break;
+    }
+    const uintptr_t Task = CurrentEventTask();
+    uint32_t Map = 0;
+    int32_t Event = 0;
+    const bool Have = Task && ReadEventTaskKey(Task, &Map, &Event);
+    LOG_INFO("[BOSS] probe: \"I am the host\" in slot %u of event %d of map %08X%s -- its state also holds: %s",
+             Host1.Slot, Have ? Event : -1, Have ? Map : 0, Have ? "" : " (outside a task)",
+             At ? Line : "nothing of the two kinds");
 }
 
 // The whole pattern was four conditions deep -- "the host is inside" and "someone who is not the host
@@ -238,7 +325,16 @@ void __fastcall RegisterDetour(void* Env, uint8_t Slot, void* Cond) {
     if (!ReadRegSafe(Env, Slot, Cond, &R) || R.Kind == 0) return;
     t_ring[t_ringNext++ % kRing] = R;
     if (R.Kind == 2 && R.A10 == 0 && R.A11 == 0) TryMark(R);
-    if (R.Kind == 2 && R.A10 == 1 && R.A11 == 0) TryMarkHostBranch(R);
+    if (R.Kind == 2 && R.A10 == 1 && R.A11 == 0) {
+        TryMarkHostBranch(R);
+        LogHostBranchShape(R);
+    }
+    if (R.Kind == 1 && R.Mode == 1) {
+        const uintptr_t Task = CurrentEventTask();
+        uint32_t Map = 0;
+        int32_t Event = 0;
+        if (Task && ReadEventTaskKey(Task, &Map, &Event)) MarkFromFile(Map, Event);
+    }
 }
 
 bool NoFightRunningSafe() {
@@ -340,8 +436,9 @@ void NoteBossStartTask(int32_t Battle) {
     if (N >= kMaxMarks) return;
     g_marks[N].store(Key);
     g_markCount.store(N + 1, std::memory_order_release);
+    WriteMarkToFile(Map, Event);   // and in every run after this one
     LOG_INFO("[BOSS] event %d of map %08X started battle %d -- it is a boss start, so a guest standing in its "
-             "regions wakes it here too", Event, Map, Battle);
+             "regions wakes it here too (written down for later runs)", Event, Map, Battle);
 }
 
 bool InstallBossArena(bool Enabled) {

@@ -508,6 +508,18 @@ uint64_t __fastcall MpActiveHook(void* Session) {
         return 0;
     }
     if (g_guestKillCounts.load() && Caller == kKillCountReturn && IsGuestInHostWorld()) {
+        // ...but not while this world is being rebuilt by a rest: the game takes every character away
+        // and puts it back, and counting those as kills is how a guest's counters climbed by two at
+        // every rest (21.09 evening, checklist 5). During those frames the game's own answer stands.
+        if (DS2Coop::Sync::WorldResetRunningOrFresh(3000)) {
+            static std::atomic<uint32_t> s_atReset{ 0 };
+            const uint32_t N = s_atReset.fetch_add(1) + 1;
+            if (N <= 10 || N % 100 == 0) {
+                LOG_INFO("[ENEMIES] a generator record died while a rest was rebuilding this world -- not counted "
+                         "as a kill (%u so far)", N);
+            }
+            return g_origMpActive(Session);
+        }
         const uint32_t Count = g_guestKillCountCalls.fetch_add(1) + 1;
         if (Count <= 5 || Count % 200 == 0) {
             LOG_INFO("[ENEMIES] a generator record died here as a guest -- counted as the host counts it "
@@ -525,6 +537,26 @@ uint64_t __fastcall MpActiveHook(void* Session) {
         if (Count <= 5 || Count % 200 == 0) {
             LOG_INFO("[LOOT] an enemy's drop rolled here from its normal lot, not the multiplayer one (%u so far)",
                      Count);
+        }
+        return 0;
+    }
+    // A talk that is open asks this too, and a guest's answer "I am a client" is what refuses it a
+    // covenant: "you cannot join a covenant while a phantom is summoned" (21.09 evening, report 7).
+    // The two multiplayer questions an NPC script asks already answer "alone" while a talk is open
+    // (mp_gates.cpp); this is the third. Only while a talk is up, only in a lobby, and each caller is
+    // named once in the log so the site can be gated exactly later.
+    if (DS2Coop::Sync::IsTalkOpenNearby() && DS2Coop::Session::SessionManager::GetInstance().IsActive()) {
+        static std::atomic<uint32_t> s_told{ 0 };
+        static std::atomic<uintptr_t> s_sites[16] = {};
+        bool Known = false;
+        for (const std::atomic<uintptr_t>& Site : s_sites) Known = Known || Site.load() == Caller;
+        if (!Known) {
+            const uint32_t N = s_told.fetch_add(1);
+            if (N < 16) {
+                s_sites[N].store(Caller);
+                LOG_INFO("[GATES] a talk asked whether this is someone else's world (from exe+0x%llX) -- answered "
+                         "no while talking", static_cast<unsigned long long>(Caller - reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr))));
+            }
         }
         return 0;
     }
@@ -1740,6 +1772,21 @@ const GateSite Sites[] = {
     // are in a solo game. Only this one test changes; exe+0x5135F0 has dozens of callers and keeps its
     // answer everywhere else.
     { "map objects: a guest writes none",  0x1F2EEB, { 0x84, 0xC0 }, { 0x30, 0xC0 } },
+    // *** ...and reads none back either. ***
+    //
+    // Writing them down was only half of it: on 21.09 evening the door was shut again at home even
+    // with the record written (checklist 7). exe+0x1F31A0 puts a map's objects back where its compact
+    // record says as the map loads, and it starts with the very same question:
+    //
+    //   exe+0x1F31DC  MOV  RCX,[GMImp+0x22F0]
+    //   exe+0x1F31E8  CALL exe+0x5135F0        ; is this game a session's client?
+    //   exe+0x1F31ED  TEST AL,AL
+    //   exe+0x1F31EF  0F 85 ...  JNZ +0x1F360F  ; yes -> the map loads as its map starts
+    //
+    // A lobby stays up while a guest is back in its own world, so its own doors kept loading shut.
+    // The same two bytes: the answer is dropped and the record is read as in a solo game. The host's
+    // shape still wins where it differs -- map_objects.cpp puts it in right after the map has loaded.
+    { "map objects: a guest reads none",   0x1F31ED, { 0x84, 0xC0 }, { 0x30, 0xC0 } },
     { "byte [RAX+0x1A] test",            0x3F2536, { 0x74, 0xF6 }, { 0x90, 0x90 } },
     { "helper result test",              0x3F2557, { 0x75, 0xD5 }, { 0x90, 0x90 } },
 };
@@ -4083,6 +4130,9 @@ void PlayerSync::Update(float deltaTime) {
             m_stateSyncTimer = 0.0f;
         }
 
+        // The partner is told my character's name whenever it changes (report 8 of 21.09 evening).
+        TellPartnerMyName();
+
         // Event flag diff. Rate-limits itself to once a second and does nothing
         // at all unless the ini turned it on.
         FlagSyncTick();
@@ -5071,6 +5121,30 @@ void PlayerSync::EnableSummoning() {
             }
         }
     } __except(EXCEPTION_EXECUTE_HANDLER) {}
+}
+
+// The name the partner knows me by. The handshake carries it once, and a lobby joined before the
+// character existed carries "Player"; this goes out whenever the name changes (21.09 evening,
+// report 8: "I lit a bonfire and it told him Player lit it").
+void PlayerSync::TellPartnerMyName() {
+    if (!Session::SessionManager::GetInstance().IsActive()) return;
+    const std::string Name = GetLocalCharacterName();
+    if (Name.empty()) return;
+    static std::string s_sent;
+    static ULONGLONG s_at = 0;
+    const ULONGLONG Now = GetTickCount64();
+    if (Name == s_sent && Now - s_at < 30000) return;   // and a reminder now and then, for a late join
+    const bool New = Name != s_sent;
+    s_sent = Name;
+    s_at = Now;
+    Network::PlayerNamePacket Packet{};
+    Packet.header.magic = 0x44533243;
+    Packet.header.type = Network::PacketType::PlayerName;
+    Packet.header.size = sizeof(Packet);
+    Packet.header.timestamp = Now;
+    strncpy_s(Packet.name, Name.c_str(), sizeof(Packet.name) - 1);
+    Network::PeerManager::GetInstance().BroadcastPacket(&Packet.header);
+    if (New) LOG_INFO("[NAME] my character is %s -- telling the other player", Name.c_str());
 }
 
 std::string PlayerSync::GetLocalCharacterName() {

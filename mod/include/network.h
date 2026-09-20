@@ -105,6 +105,10 @@ enum class PacketType : uint8_t {
     PartnerLook = 0x48,
     // host -> guest: the states of a map's objects -- gates, bridges, lifts, statues (map_objects.cpp).
     MapObjectStates = 0x49,
+    // The character's name, sent whenever it changes. A player who joined the lobby before its
+    // character existed handed over "Player" in the handshake and kept that name in every notice the
+    // partner saw afterwards (21.09 evening, report 8).
+    PlayerName = 0x4A,
 
     // Custom data
     ChatMessage = 0x40,
@@ -334,6 +338,11 @@ enum class NetProbeKind : uint8_t {
 };
 
 // Peer information
+struct PlayerNamePacket {
+    PacketHeader header;
+    char         name[32];
+};
+
 struct PeerInfo {
     uint64_t playerId;
     std::string playerName;
@@ -364,6 +373,7 @@ public:
     bool IsHost() const { return m_isHost; }
     bool IsConnected() const { return m_connected; }
     bool IsHandshakeConfirmed() const { return m_handshakeConfirmed; }
+    void SetPeerName(uint64_t playerId, const std::string& name);
 
     uint64_t GetLocalPlayerId() const { return m_localPlayerId; }
     const std::string& GetSessionPassword() const { return m_sessionPassword; }

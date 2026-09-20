@@ -140,6 +140,8 @@ struct StuckWatch {
 };
 StuckWatch g_stuck[kStuckWatches] = {};
 std::atomic<uint32_t> g_queuedKills{ 0 }, g_ownRolls{ 0 }, g_secondRolls{ 0 };
+std::atomic<uint32_t> g_deathsAtReset{ 0 };
+constexpr ULONGLONG   kResetQuietMs = 3000;   // how long after a reset a death is still its bookkeeping
 
 uintptr_t ExeBase() {
     static const uintptr_t Base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
@@ -218,6 +220,19 @@ bool CopyPacketSafe(uint8_t* Dst, const void* Src) {
 // structures. The packet is only queued; the tick, on the game thread, decides
 // whether this player is a guest in the host's world at all.
 uint64_t __fastcall DeadReceiveDetour(void* Receiver, char Id, void* Data, uint32_t Length, void* Arg5) {
+    // A world reset here, or one a moment ago, is the partner's rest being replayed: the game takes
+    // every character away and makes it again, and the deaths that arrive over those few frames belong
+    // to that bookkeeping, not to anything anyone killed. Letting them through is what stood the
+    // enemies up and dropped them again where they stood (checklist 5, twice reported). The count is
+    // logged so the next run says plainly whether such packets come at all.
+    if (Id == '7' && g_enabled.load() && WorldResetRunningOrFresh(kResetQuietMs)) {
+        const uint32_t N = g_deathsAtReset.fetch_add(1) + 1;
+        if (N <= 10 || N % 50 == 0) {
+            LOG_INFO("[ENEMIES] a death came in while this world was being rebuilt by a rest -- dropped "
+                     "(%u so far)", N);
+        }
+        return 0;
+    }
     const uint64_t R = g_receive(Receiver, Id, Data, Length, Arg5);
     if (Id != '7' || Length != 0x18 || !Data || !g_enabled.load() ||
         !Session::SessionManager::GetInstance().IsActive()) {

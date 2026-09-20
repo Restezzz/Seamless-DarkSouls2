@@ -259,6 +259,7 @@ void SetTravelPoseFix(bool on);
 // rest_replay_full); the host world's flags carried into a guest's own world (player_sync.cpp,
 // ini flags_carry_home).
 void SetRestReplayFull(bool on);
+bool WorldResetRunningOrFresh(unsigned long long withinMs);   // a rest here is rebuilding the world right now
 void SetFlagsCarryHome(bool on);
 // Game thread, a map of this player's own world being made: the host world's flags written in before
 // that map's event scripts start (player_sync.cpp).
@@ -328,7 +329,8 @@ std::string GameBonfireName(int32_t bonfireId);
 // A bonfire one player lights is lit for the other (bonfire_lit.cpp).
 bool InstallBonfireLit();
 void NotePartnerBonfireLit(int32_t id, int32_t map, const std::string& from);   // network thread
-void BonfireLitGameTick();   // game thread
+void BonfireLitGameTick();
+int  MyLitBonfiresInHostWorld(uint16_t* ids, uint8_t* flags, int max);   // lit by me over there, this run   // game thread
 std::string GameMapName(int32_t rawMap);
 // Probe: both characters' bonfire-travel pose numbers for a while after either
 // player travels (travel_sync.cpp). Game thread.
@@ -411,6 +413,7 @@ public:
     bool GrantSoapstones();
     void EnableSummoning();
     std::string GetLocalCharacterName();
+    void        TellPartnerMyName();          // the name goes out whenever it changes
     // This player's own name only ([[GMImp+0xA8]+0x114]), "" while the character is not made yet --
     // never someone else's name from the session (loot_sync.cpp keys its records by it).
     std::string GetOwnCharacterName();

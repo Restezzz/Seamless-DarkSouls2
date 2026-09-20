@@ -151,6 +151,11 @@ constexpr uint32_t kObjResetAll = 0x3C1B50;   // (): every map object back to th
 void* g_objResetOriginal = nullptr;
 bool  g_inOwnRest = false;                    // game thread only
 
+// A reset of this world takes every enemy away and makes them again. Other parts of the mod need to
+// know that it is happening right now, or has just happened: what the game does during those few
+// frames is bookkeeping, not play. See WorldResetRunningOrFresh below.
+std::atomic<bool> g_resetRunning{ false };
+
 void __fastcall ObjResetAllDetour() {
     if (g_inOwnRest && g_enabled.load() && !Session::SessionManager::GetInstance().IsHost() && InHostWorld()) {
         static uint32_t s_told = 0;
@@ -181,7 +186,9 @@ void __fastcall RestResetDetour(void* A, void* B, void* C, void* D) {
     DropWhatIsOlderThanTheReset("a rest here respawns the enemies");
     NoteLocalRestForPose();
     g_inOwnRest = true;
+    g_resetRunning.store(true);
     g_restReset(A, B, C, D);
+    g_resetRunning.store(false);
     g_inOwnRest = false;
     g_lastResetAt.store(GetTickCount64());
     g_lastWasReplay.store(false);
@@ -234,7 +241,10 @@ bool ReplayResetSafely() {
 // The partner's rest, in the order a rest of one's own takes: what the mod holds goes first.
 bool DropAndReplayReset(const char* Why) {
     DropWhatIsOlderThanTheReset(Why);
-    return ReplayResetSafely();
+    g_resetRunning.store(true);
+    const bool Ok = ReplayResetSafely();
+    g_resetRunning.store(false);
+    return Ok;
 }
 
 void __fastcall GenUpdateDetour(void* Manager, float* Dt) {
@@ -298,6 +308,18 @@ bool Hook(uint32_t Rva, void* Detour, void** Original, const char* What) {
 
 void SetRestReplayFull(bool On) {
     g_replayFull.store(On);
+}
+
+// A reset of this world is running, or ended less than WithinMs ago (21.09 evening, checklist 5:
+// "the enemies stand up and die on the spot, and now it happens at the host as well"). The reset
+// takes every character away and makes it again, and in a session that shows up as deaths: the kill
+// counters of the guest went up by two at every single rest -- 4, 6, 8 -- with the host reporting no
+// kills at all. Nothing that comes in over those few frames is play, so the parts of the mod that
+// answer for a death ask here first.
+bool WorldResetRunningOrFresh(unsigned long long WithinMs) {
+    if (g_resetRunning.load()) return true;
+    const ULONGLONG At = g_lastResetAt.load();
+    return At != 0 && GetTickCount64() - At < WithinMs;
 }
 
 bool InstallWorldSync() {

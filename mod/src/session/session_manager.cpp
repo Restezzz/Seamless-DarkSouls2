@@ -312,6 +312,13 @@ void SessionManager::UpdatePlayerArea(uint64_t playerId, uint32_t onlineAreaId) 
     }
 }
 
+void SessionManager::UpdatePlayerName(uint64_t playerId, const std::string& name) {
+    std::lock_guard<std::mutex> lock(m_playersMutex);
+    for (auto& player : m_players) {
+        if (player.playerId == playerId) player.playerName = name;
+    }
+}
+
 void SessionManager::UpdatePlayerHealth(uint64_t playerId, int32_t health, int32_t maxHealth) {
     std::lock_guard<std::mutex> lock(m_playersMutex);
     SessionPlayer* player = GetPlayer(playerId);

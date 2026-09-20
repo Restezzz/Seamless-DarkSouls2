@@ -1839,6 +1839,12 @@ void ApplyPartnerBonfires(uintptr_t List = 0, bool AtLoad = false) {
             Flags[I] = g_partnerBonfireFlags[I];
         }
     }
+    // ...and the ones this player lit over there itself, which the game's own refill knows nothing
+    // about (bonfire_lit.cpp, report 2 of 21.09 evening).
+    const int Mine = Count < kMaxBonfires
+                         ? MyLitBonfiresInHostWorld(Ids + Count, Flags + Count, static_cast<int>(kMaxBonfires - Count))
+                         : 0;
+    Count += static_cast<uint32_t>(Mine);
     if (!Count) return;
     const bool Share = IsProgressSharingOn();
     int Unlocked = 0;
@@ -1933,10 +1939,15 @@ void TickHold(int Join, int32_t Hp) {
     if (!g_hold.Active) return;
     const ULONGLONG Now = GetTickCount64();
     const char* Why = nullptr;
+    // Both of us being down used to end the hold at once ("the partner fell too" / "I fell too"), and
+    // that is how a guest lost the souls of a fight it took part in: on 21.09 evening the host fell at
+    // 19:50:22, the guest at 19:51:19 -- released, sent home -- and the host went on alone and killed
+    // the boss at 19:54:03, with the guest's reward nowhere. The fight itself decides now: while the
+    // host's battle is still running the guest waits where it fell, and the reward finds it there
+    // (boss_down.cpp gives the souls to a player who is down). A host that gives up and respawns ends
+    // the battle, which lands on "the boss fight is over" a moment later.
     if (CopyStillPayingOut())                            Why = nullptr;
     else if (!BossFightOn(Join))                         Why = "the boss fight is over";
-    else if (g_hold.OwnDeath && !g_partnerAlive.load())  Why = "the partner fell too";
-    else if (!g_hold.OwnDeath && IsDead(Hp))             Why = "I fell too";
     else if (Join != kJoinInWorld)                        Why = "the session ended";
     else if (!PartnerConnected())                         Why = "the partner is gone";
     else if (Now - g_hold.Since > kHoldGiveUpMs)          Why = "waited 15 minutes";
