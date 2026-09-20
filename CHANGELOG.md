@@ -10,12 +10,12 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 
 LukeYui's Seamless Co-op for Dark Souls II is out, from the author of the Elden Ring and Dark Souls III
 mods. Everything this project was reaching for is there and done properly, so it stops here: the release
-archives are closed, the source and the notes stay. 0.3.1 was half done -- what it fixed is in the
-commits on `dev-0.3.1`.
+archives are closed, the source and the notes stay. 0.3.1 was half done and never released; what it
+fixed is in the repository.
 Вышел Seamless Co-op для Dark Souls II от LukeYui — от автора модов для Elden Ring и Dark Souls III.
 Всё, к чему шёл этот проект, там уже есть и сделано как надо, поэтому он останавливается: архивы
-релизов закрыты, исходники и записи остаются. 0.3.1 сделана наполовину — что успело попасть, лежит в
-коммитах ветки `dev-0.3.1`.
+релизов закрыты, исходники и записи остаются. 0.3.1 сделана наполовину и не выпущена; что успело
+попасть — лежит в репозитории.
 
 ## 0.3.0 — 2026-09-20
 
