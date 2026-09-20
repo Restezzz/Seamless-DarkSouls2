@@ -107,6 +107,32 @@ test's results before the release.
   персонажу: без него не создать, а при выходе в меню оно закрывается само. У костра в режиме PvP мод пишет, почему
   игра не даёт сесть.
 
+- From the test of 21.09 morning. Doors, levers and lift buttons move for a guest the moment it uses them: a state
+  change no longer waits for the host to confirm it, which is why a door was simply open at the end instead of
+  swinging, a lift started late as if its button had been pressed twice and a lever could not be pulled a second
+  time. The host's objects are put in place once, as a map loads, and never over what this player has done to them
+  since -- and a chest broken here is not put back together. What a guest opens in the host's world is open in its
+  own world afterwards (a door with a key, a shortcut): a guest's game writes its map objects down again. Its own
+  rest in the host's world no longer puts the host's lifts and gates back. Enemies that stand up after a rest stay
+  up (what the mod remembered of that world is dropped before the reset, not after). A boss's souls reach a player
+  who was down when it died, not just the items. A guest walking into an arena wakes the boss on a second try even
+  when the start's conditions are not recognised. Arriving in the partner's world heals, the way a summon does. A
+  character left kneeling after levelling up gets back on its feet. Making characters together: the partner's event
+  scripts are left alone while neither player has joined the other, so skipping the crones' scene does not leave
+  the other on a black screen. The PvP notice at a bonfire reads properly again.
+  По тесту 21.09 утром. Двери, рычаги и кнопки лифта у гостя двигаются сразу: смена состояния больше не ждёт
+  подтверждения хоста — из-за него дверь не открывалась, а просто оказывалась открытой, лифт трогался с задержкой,
+  будто кнопку нажали дважды, а рычаг не давал дёрнуть себя второй раз. Объекты хоста ставятся один раз, при
+  загрузке карты, и больше не перебивают то, что игрок сделал с ними сам, — разбитый сундук не собирается обратно.
+  Открытое гостем в мире хоста остаётся открытым и в своём мире (дверь ключом, шорткат): игра гостя снова пишет
+  объекты карты в сейв. Свой отдых в мире хоста больше не возвращает на место лифты и ворота хоста. Мобы, вставшие
+  после отдыха, остаются живыми (всё, что мод помнил о мире, сбрасывается до сброса, а не после). Души с босса
+  получает и тот, кто лежал, а не только предметы. Гость, вошедший в арену, будит босса и тогда, когда условия
+  старта не опознались, — со второй попытки. Вход в мир напарника лечит, как обычный призыв. Персонаж, застрявший
+  на коленях после прокачки, поднимается. Создание персонажей вдвоём: пока никто ни к кому не зашёл, скрипты
+  событий напарника не трогают чужую игру, и скип сцены у старушек не оставляет второго с чёрным экраном.
+  Уведомление про PvP у костра снова читается.
+
 Both players need 0.3.0: seven new packets between the players.
 Нужна 0.3.0 у обоих: семь новых пакетов между игроками.
 

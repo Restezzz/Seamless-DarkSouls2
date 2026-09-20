@@ -17,6 +17,7 @@ namespace DS2Coop::Sync {
 // player's save, so this only does anything when flag_sync=on in the ini.
 bool ApplyRemoteEventFlag(uint32_t flagId, bool value);
 void KeepFlagLocal(uint32_t flagId, bool value);   // a flag of my own the partner is not told about
+void ReapplyMyTalkFlagsOnArrival();                // game thread: my talk progress into the host's flag table
 bool GetLocalPlayerPosition(float& x, float& y, float& z, float& rotY);
 
 // Ask the server for the sign list at the next opportunity, rather than
@@ -211,6 +212,7 @@ void SetGuestNpcHitsIgnored(bool on);
 void SetNpcGiftShare(bool on);                 // what an NPC gives goes to the partner as well
 void SetMapObjectStates(bool on);              // map_objects.cpp: the map's objects as the host has them
 void MapObjectsTick();                         // game thread
+void MapObjectsAfterRest(const char* why);     // game thread: a rest reset every object, so put them in again
 void NoteHostMapObjects(int32_t map, uint8_t source, const void* entries, uint16_t count);   // network thread
 void SetNpcEventsAfterTalk(bool on);
 uintptr_t CurrentEventTask();                                           // mp_gates.cpp, 0 outside one
@@ -235,6 +237,7 @@ bool InstallBossDown(bool enabled);
 // A guest standing in a boss's arena wakes the boss on the host, as the host would (boss_arena.cpp,
 // docs §3.47, ini boss_guest_starts).
 bool InstallBossArena(bool enabled);
+void NoteBossStartTask(int32_t battle);        // game thread: this event task starts a boss
 // A guest down far from its partner in the same map: the world is loaded around the partner and
 // the camera follows it (death_camera.cpp, ini far_death_camera). Game thread.
 bool InstallFarDeathCamera(bool enabled);
@@ -331,6 +334,7 @@ std::string GameMapName(int32_t rawMap);
 // player travels (travel_sync.cpp). Game thread.
 void WatchPoses();
 void PoseProbeTick();
+void NoteLocalRestForPose();                   // game thread: a rest holds the character on purpose
 void CancelDeathRejoin();             // leaving on purpose: no automatic return
 // Put a sign down again for the host to summon, without the once-per-handshake
 // limit of the automatic join (player_sync.cpp).

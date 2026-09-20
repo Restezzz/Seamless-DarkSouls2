@@ -384,6 +384,7 @@ bool ReadLocalSpot(Spot* Out) {
 Spot g_restSpot{};      // last rest at a bonfire in the host's world
 Spot g_arrivalSpot{};   // beside the bonfire nearest to where we arrived
 int  g_lastJoinState = -1;
+ULONGLONG g_talkFlagsAgainAt = 0;   // the second pass of my own talk flags after an arrival
 std::atomic<bool> g_forgetSpots{ false };
 
 struct Hold {
@@ -1182,6 +1183,7 @@ uint64_t __fastcall BattleStartDetour(void* Mgr, int32_t AreaIndex, int32_t Batt
     const uint64_t R = reinterpret_cast<BattleStartFn>(g_battleStartOriginal)(Mgr, AreaIndex, BattleId);
     LOG_INFO("[BOSS] battle %d in area %d, start asked from exe+0x%llX -> %s", BattleId, AreaIndex,
              static_cast<unsigned long long>(Caller - ExeBase()), (R & 0xFF) ? "yes" : "no");
+    if (R & 0xFF) NoteBossStartTask(BattleId);   // boss_arena.cpp: so a guest can wake this one as well
     return R;
 }
 
@@ -1561,10 +1563,40 @@ void TickGuestBoss(int Join) {
     }
 }
 
+// A summon heals: the game hands a phantom full health when it arrives, because the world it comes to
+// is not the one it wore itself down in. A seamless join keeps the character exactly as it stood, so on
+// 21.09 a guest came in with the sliver of health it had at home, sat at the host's bonfire, and when
+// the host fell it was sent home to that same sliver (report 6). The arrival heals now, as the game's
+// own summon does; estus and everything else is left alone.
+void HealOnArrival() {
+    uintptr_t Gm = 0, Player = 0;
+    if (!ReadPtr(ExeBase() + kGameManagerImp, &Gm) || !ReadPtr(Gm + 0xD0, &Player)) return;
+    __try {
+        const int32_t Hp = *reinterpret_cast<const int32_t*>(Player + 0x168);
+        const int32_t Max = *reinterpret_cast<const int32_t*>(Player + 0x170);
+        if (Max <= 0 || Hp <= 0 || Hp >= Max) return;
+        *reinterpret_cast<int32_t*>(Player + 0x168) = Max;
+        LOG_INFO("[JOIN] arrived in the partner's world with %d of %d HP -- healed, the way a summon does", Hp, Max);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        LOG_WARNING("[JOIN] could not heal on arrival");
+    }
+}
+
 void TickArrival(int Join) {
     const bool Arrived = Join == kJoinInWorld && g_lastJoinState != kJoinInWorld;
     g_lastJoinState = Join;
-    if (!Arrived) return;
+    // The flag table the game hands a guest is the host's copy, and it is swapped in around the arrival:
+    // once now and once a few seconds later, so the writes land in the copy that stays.
+    if (!Arrived) {
+        if (g_talkFlagsAgainAt && GetTickCount64() >= g_talkFlagsAgainAt && Join == kJoinInWorld) {
+            g_talkFlagsAgainAt = 0;
+            ReapplyMyTalkFlagsOnArrival();
+        }
+        return;
+    }
+    HealOnArrival();
+    ReapplyMyTalkFlagsOnArrival();   // player_sync.cpp: the lines I have already heard stay heard
+    g_talkFlagsAgainAt = GetTickCount64() + 5000;
     Spot Here{};
     if (!ReadLocalSpot(&Here)) return;
     if (g_arrivalSpot.Valid && g_arrivalSpot.Area == Here.Area) return;   // same map: keep the first

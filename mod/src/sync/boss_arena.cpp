@@ -45,7 +45,7 @@ constexpr uint32_t kIsHostEval     = 0x46FDC0;   // IsHost: (condition) -> AL
 constexpr uint32_t kCondRegister   = 0x470A40;   // (esd env, slot, condition)
 constexpr uint32_t kRegionsHold    = 0x461E10;   // (regions, count, mode, float* position) -> AL
 constexpr uint32_t kEvalSlot       = 0x40;       // vtable slot 8: the condition's eval
-constexpr int      kRing           = 8;
+constexpr int      kRing           = 48;
 constexpr uint32_t kMaxMarks       = 64;
 constexpr uint32_t kMaxRegions     = 64;
 
@@ -148,6 +148,50 @@ bool CondMarked(uintptr_t Cond) {
     return false;
 }
 
+void Mark(uint64_t Key, const char* How, int32_t Event, uint32_t Map, uint32_t Regions) {
+    if (Marked(Key)) return;
+    const uint32_t N = g_markCount.load();
+    if (N >= kMaxMarks) return;
+    g_marks[N].store(Key);
+    g_markCount.store(N + 1, std::memory_order_release);
+    LOG_INFO("[BOSS] event %d of map %08X is a boss start (%s%u region(s)) -- a guest standing in them wakes the "
+             "boss here too", Event, Map, How, Regions);
+}
+
+// The whole pattern was four conditions deep -- "the host is inside" and "someone who is not the host
+// is inside", both spelled out -- and in the test of 21.09 morning not one boss start was recognised by
+// it: no line of it in the host's log, so the guest walked into the Last Giant's arena and nothing
+// woke. Two things are asked for now instead of four, and the thread's ring of registrations holds six
+// times as many.
+//
+// The short pattern is the host's own branch: an IsHost(slot, 1, 0) with a region condition "inside" in
+// the very same slot -- "I am the host and the player is standing in these regions", which is how every
+// boss start asks. It is a marking only: it costs nothing until a guest is actually in those regions
+// with no fight running (RegionEvalDetour).
+void TryMarkHostBranch(const Reg& Host1) {
+    const Reg* Region = nullptr;
+    for (const Reg& R : t_ring) {
+        if (R.Env != Host1.Env || !R.Cond || R.Slot != Host1.Slot) continue;
+        if (R.Kind == 1 && R.Mode == 1 && R.Count && R.Count <= kMaxRegions) Region = &R;
+    }
+    if (!Region) return;
+    const uintptr_t Task = CurrentEventTask();
+    uint32_t Map = 0;
+    int32_t Event = 0;
+    if (Task && ReadEventTaskKey(Task, &Map, &Event)) {
+        Mark((static_cast<uint64_t>(Map) << 32) | static_cast<uint32_t>(Event), "\"the host is inside\", ",
+             Event, Map, Region->Count);
+        return;
+    }
+    if (CondMarked(Region->Cond)) return;
+    const uint32_t N = g_condMarkCount.load();
+    if (N >= kMaxMarks) return;
+    g_condMarks[N].store(Region->Cond);
+    g_condMarkCount.store(N + 1, std::memory_order_release);
+    LOG_INFO("[BOSS] a boss start outside an event task: \"the host is inside\" region condition %p marked",
+             reinterpret_cast<void*>(Region->Cond));
+}
+
 // An IsHost(S2, 0, 0) just registered: the rest of the pattern among this thread's last
 // registrations of the same state.
 void TryMark(const Reg& Host0) {
@@ -174,15 +218,8 @@ void TryMark(const Reg& Host0) {
     uint32_t Map = 0;
     int32_t Event = 0;
     if (Task && ReadEventTaskKey(Task, &Map, &Event)) {
-        const uint64_t Key = (static_cast<uint64_t>(Map) << 32) | static_cast<uint32_t>(Event);
-        if (Marked(Key)) return;
-        const uint32_t N = g_markCount.load();
-        if (N >= kMaxMarks) return;
-        g_marks[N].store(Key);
-        g_markCount.store(N + 1, std::memory_order_release);
-        LOG_INFO("[BOSS] event %d of map %08X is a boss start: %u regions, slots %u (host) / %u -- a guest "
-                 "standing in them wakes the boss here too", Event, Map, RegionS1->Count, HostS1->Slot,
-                 Host0.Slot);
+        Mark((static_cast<uint64_t>(Map) << 32) | static_cast<uint32_t>(Event), "both branches, ", Event, Map,
+             RegionS1->Count);
         return;
     }
     if (CondMarked(RegionS1->Cond)) return;
@@ -201,6 +238,7 @@ void __fastcall RegisterDetour(void* Env, uint8_t Slot, void* Cond) {
     if (!ReadRegSafe(Env, Slot, Cond, &R) || R.Kind == 0) return;
     t_ring[t_ringNext++ % kRing] = R;
     if (R.Kind == 2 && R.A10 == 0 && R.A11 == 0) TryMark(R);
+    if (R.Kind == 2 && R.A10 == 1 && R.A11 == 0) TryMarkHostBranch(R);
 }
 
 bool NoFightRunningSafe() {
@@ -284,6 +322,27 @@ uint64_t __fastcall RegionEvalDetour(void* Cond) {
 }
 
 } // namespace
+
+// The last way in: the host's own script has just asked for a battle to start, so the event task it
+// asked from is a boss start, whatever its conditions looked like. From then on the guest can wake that
+// boss by itself -- which is what a second try at a boss looks like, and a boss is rarely killed the
+// first time (21.09 morning, report 8: "I walk in and the boss is not woken; the host walks in and it
+// is").
+void NoteBossStartTask(int32_t Battle) {
+    if (!g_enabled.load()) return;
+    const uintptr_t Task = CurrentEventTask();
+    uint32_t Map = 0;
+    int32_t Event = 0;
+    if (!Task || !ReadEventTaskKey(Task, &Map, &Event)) return;
+    const uint64_t Key = (static_cast<uint64_t>(Map) << 32) | static_cast<uint32_t>(Event);
+    if (Marked(Key)) return;
+    const uint32_t N = g_markCount.load();
+    if (N >= kMaxMarks) return;
+    g_marks[N].store(Key);
+    g_markCount.store(N + 1, std::memory_order_release);
+    LOG_INFO("[BOSS] event %d of map %08X started battle %d -- it is a boss start, so a guest standing in its "
+             "regions wakes it here too", Event, Map, Battle);
+}
 
 bool InstallBossArena(bool Enabled) {
     static bool Installed = false;

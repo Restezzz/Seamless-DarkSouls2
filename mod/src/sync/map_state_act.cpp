@@ -57,7 +57,7 @@ constexpr uint32_t  kObjectByHandle = 0x17BD90;   // (u32* handle) -> map object
 constexpr uint32_t  kStateActCtrlVt = 0x10CF668;  // StateActCtrl::vftable
 constexpr uint32_t  kStateActRecv   = 0x1F48C0;   // (receiver, type, data, size, sender)
 constexpr uint32_t  kEnterState    = 0x240270;   // (ctrl, state, notify, confirmed, flag)
-constexpr uint32_t  kSessionClient = 0x247CD0;   // () -> AL: a client of a session (a state change waits)
+constexpr uint32_t  kSessionClient = 0x247CB0;   // () -> AL: a session client (its state changes wait)
 constexpr uint32_t  kNoNetworkFlag = 0x80;       // StateActCtrl flag: takes no state from the network
 constexpr uint32_t  kMajula         = 0x0A040000;
 constexpr ULONGLONG kPollMs         = 250;
@@ -199,18 +199,40 @@ bool SessionClientSafe() {
     }
 }
 
-// An object that takes no state from the network has nobody to confirm its changes, so it makes them
-// here and now, as it does for a host. The fourth argument is all the game weighs besides the state's
-// own kind and being a client, so clearing it is the whole change.
+// Every map object a guest touches changes state here and now, as it does for a host (21.09 morning,
+// report 3 and 9, checklist 1 and 5).
+//
+// The game holds a guest's state change until the host confirms it: exe+0x240270 leaves the current
+// state (+0x1C) alone and writes only the one it is going to (+0x1D) when the caller asks for a
+// confirmation (its fourth argument, set by the ctrl's own vt[0x20]), the new state is of a kind that
+// gets confirmed (its descriptor's +9, kinds 2 and 3), and exe+0x247CB0 -> exe+0x5135F0 says this game
+// is a session's client. The confirmation is packet '&' (exe+0x23FD10), and it costs a round trip --
+// when it comes at all: an object whose event called 131651(obj, 0) drops every such packet (flag
+// 0x80), and the whole test of 21.09 morning has not one '&' in the host's log.
+//
+// Which player the game counts as a client is not asked here on purpose. The report of 21.09 morning
+// has the doors and the lift from the host's own machine as well, and a state the game would not have
+// held is not changed by clearing the fourth argument -- so it is cleared for both sides, and the fix
+// does not hang on reading that one branch right.
+//
+// That hold is what a guest saw as: a door that stayed shut while it was pushed and was simply open at
+// the end (the state was held, then the host's '$' put the last state in at once), a lift that starts
+// late and looks as if the button were pressed twice, a lever that could not be pulled a second time
+// (the script waits for the lever's own state, which is still the old one). Nothing of it makes sense
+// in a seamless session, where every player runs its own world and the partner's world hears about the
+// change through the very same packets. So the fourth argument is cleared for every object: the state
+// is entered at once. A '&' that does arrive later finds the state already there and simply sets it
+// again (exe+0x23FD10 takes the "+0x1C equals +0x1D" branch), so the two worlds still agree.
 void __fastcall EnterStateDetour(uintptr_t Ctrl, uint8_t State, uint8_t Notify, uint8_t Confirmed, uint8_t Flag) {
     if (Confirmed && g_local.load(std::memory_order_relaxed) &&
-        Session::SessionManager::GetInstance().IsActive() && (FlagsOfSafe(Ctrl) & kNoNetworkFlag) &&
-        SessionClientSafe()) {
+        Session::SessionManager::GetInstance().IsActive()) {
         static std::atomic<uint32_t> s_told{ 0 };
         if (s_told.fetch_add(1) < 20) {
-            LOG_INFO("[MAPOBJ] a map object that takes no state from the network goes to state %u at once -- "
-                     "the change would have waited for a confirmation the object drops (ctrl %p)", State,
-                     reinterpret_cast<void*>(Ctrl));
+            const uint32_t Flags = FlagsOfSafe(Ctrl);
+            LOG_INFO("[MAPOBJ] a map object goes to state %u at once -- the change would have waited for a "
+                     "confirmation (ctrl %p, flags 0x%03X, this game is %s%s)", State,
+                     reinterpret_cast<void*>(Ctrl), Flags, SessionClientSafe() ? "a session's client" : "not a client",
+                     (Flags & kNoNetworkFlag) ? ", and the object takes no state from the network" : "");
         }
         Confirmed = 0;
     }
@@ -235,7 +257,7 @@ void InstallMapStateAct(bool Local) {
                                                        reinterpret_cast<void**>(&g_enterOriginal))) {
         LOG_WARNING("[MAPOBJ] could not hook exe+0x%X (a map object entering a state)", kEnterState);
     }
-    LOG_INFO("[MAPOBJ] a map object that takes no state from the network changes state at once for a guest: %s",
+    LOG_INFO("[MAPOBJ] a guest's map objects change state at once instead of waiting for the host: %s",
              Local ? "on" : "off (map_objects_local=false)");
 }
 

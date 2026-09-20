@@ -52,6 +52,7 @@ constexpr uint32_t  kAreaByIndex    = 0x3BCE30;    // (mapMgr, index) -> area
 constexpr uint32_t  kPrefabGet      = 0x1729A0;    // object of kind 4 -> prefab
 constexpr uint32_t  kPrefabSub      = 0x449D00;    // (prefab, 0) -> the object inside
 constexpr uint32_t  kStateComp      = 0x1CA790;    // (object + 0xB8, object) -> its state-act component
+constexpr uint32_t  kChestComp      = 0x1E5C80;    // object -> its treasure box component, or 0 (chest_lids.cpp)
 constexpr uint32_t  kObjStateSet    = 0x3C1EA0;    // (object, state, 0): put the object in that state
 constexpr uint32_t  kSlotFind       = 0x1F4F90;    // (slots, 42, raw map) -> the save's compact record
 constexpr uint32_t  kCompactSlots   = 42;
@@ -61,7 +62,7 @@ constexpr uintptr_t kKillSlotSize   = 0xB10;
 constexpr uint32_t  kNoNetworkFlag  = 0x80;
 constexpr uint32_t  kMaxStates      = 250;         // one packet's entries
 constexpr ULONGLONG kHostPassMs     = 3000;
-constexpr ULONGLONG kGuestPassMs    = 5000;
+constexpr ULONGLONG kGuestPassMs    = 2000;
 constexpr int       kSendsPerPass   = 4;
 constexpr uint32_t  kPacketMagic    = 0x44533243;
 
@@ -86,6 +87,16 @@ std::map<int32_t, std::vector<Network::MapObjectState>> g_hostStates;   // guest
 std::atomic<bool>                                       g_cacheNew{ false };
 std::atomic<uint32_t>                                   g_heard{ 0 };
 std::map<int32_t, uint32_t>                             g_sent;         // host, game thread
+
+// The guest's side, game thread only. An area is put in the host's shape once, when it loads; after
+// that the game's own map object packets carry every change, and whatever this player does to an
+// object here is its own -- it is watched, not overwritten (21.09 morning, report 3, 5 and 9).
+struct Watch {
+    uintptr_t Area;                        // the area this map was last put in place for
+    std::map<uint32_t, uint8_t> Seen;      // id -> the state it had when we last looked
+    std::map<uint32_t, bool>    Mine;      // id -> changed here since, so it is left alone
+};
+std::map<int32_t, Watch> g_watch;
 
 uintptr_t ExeBase() {
     static const uintptr_t Base = reinterpret_cast<uintptr_t>(GetModuleHandle(nullptr));
@@ -160,15 +171,25 @@ uint32_t ObjectId(uintptr_t Obj) {
     return Id ? (*Id & 0x7FFFFFF) : 0;
 }
 
-// The object's state machine, or 0: only a real StateActCtrl, and only one that takes state from the
-// network (an event marked the others as each player's own, §3.53).
+// The object's state machine, or 0: only a real StateActCtrl, only one that takes state from the
+// network (an event marked the others as each player's own, §3.53), and never a chest -- a chest's lid
+// is chest_lids.cpp's, which only ever opens one that is still shut here. Handing a chest over this way
+// put a broken chest back together at the guest, whole again and still full of the junk breaking it
+// leaves behind (21.09 morning, report 5).
 uintptr_t SyncedCtrl(uintptr_t Obj) {
+    if (Game<ObjFn>(kChestComp)(Obj)) return 0;
     const uintptr_t Comp = Game<CompFn>(kStateComp)(Obj + 0xB8, Obj);
     if (!Comp) return 0;
     const uintptr_t Ctrl = *reinterpret_cast<uintptr_t*>(Comp + 0x48);
     if (!Ctrl || *reinterpret_cast<uintptr_t*>(Ctrl) != ExeBase() + kStateActCtrlVt) return 0;
     if (*reinterpret_cast<uint32_t*>(Ctrl + 0x20) & kNoNetworkFlag) return 0;
     return Ctrl;
+}
+
+// Mid-change: the state it is going to is not the one it is in. Such an object is moving right now --
+// a door being pushed open, a lift on its way -- and putting a state in would cut the movement short.
+bool Moving(uintptr_t Ctrl) {
+    return *reinterpret_cast<uint8_t*>(Ctrl + 0x1C) != *reinterpret_cast<uint8_t*>(Ctrl + 0x1D);
 }
 
 uint8_t StateOf(uintptr_t Ctrl) {
@@ -347,10 +368,16 @@ void HostPass(ULONGLONG Now) {
 struct GuestStats {
     uint32_t Seen;
     uint32_t Set;
+    uint32_t Mine;
+    uint32_t Moving;
     bool     Threw;
 };
 
-void ApplyAreaImpl(uintptr_t Area, const Network::MapObjectState* Host, uint32_t HostCount, GuestStats* S) {
+// One walk of an area's objects. With Host == nullptr it only writes down what it finds (and notices
+// what this player changed); with the host's states it also puts the ones nobody has touched here in
+// the host's shape.
+void WalkAreaImpl(uintptr_t Area, const Network::MapObjectState* Host, uint32_t HostCount, Watch* W,
+                  GuestStats* S) {
     const uintptr_t* Objects = nullptr;
     uint32_t Count = 0;
     if (!AreaObjects(Area, &Objects, &Count)) return;
@@ -361,21 +388,35 @@ void ApplyAreaImpl(uintptr_t Area, const Network::MapObjectState* Host, uint32_t
         if (!Ctrl) continue;
         const uint32_t Id = ObjectId(Obj);
         if (!Id) continue;
+        const uint8_t Now = StateOf(Ctrl);
+        const auto Was = W->Seen.find(Id);
+        if (Was != W->Seen.end() && Was->second != Now) W->Mine[Id] = true;
+        W->Seen[Id] = Now;
+        if (!Host) continue;
+        S->Seen++;
+        if (W->Mine.count(Id)) {
+            S->Mine++;
+            continue;
+        }
         const auto* End = Host + HostCount;
         const auto* At = std::lower_bound(Host, End, Id, [](const Network::MapObjectState& E, uint32_t Want) {
             return E.id < Want;
         });
-        if (At == End || At->id != Id) continue;
-        S->Seen++;
-        if (StateOf(Ctrl) == At->state) continue;
+        if (At == End || At->id != Id || At->state == Now) continue;
+        if (Moving(Ctrl)) {
+            S->Moving++;
+            continue;
+        }
         Game<ObjStateSetFn>(kObjStateSet)(Obj, At->state, 0);
+        W->Seen[Id] = At->state;
         S->Set++;
     }
 }
 
-bool ApplyAreaSafe(uintptr_t Area, const Network::MapObjectState* Host, uint32_t HostCount, GuestStats* S) {
+bool WalkAreaSafe(uintptr_t Area, const Network::MapObjectState* Host, uint32_t HostCount, Watch* W,
+                  GuestStats* S) {
     __try {
-        ApplyAreaImpl(Area, Host, HostCount, S);
+        WalkAreaImpl(Area, Host, HostCount, W, S);
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         S->Threw = true;
@@ -403,39 +444,54 @@ int AreaCountSafe(uintptr_t MapMgr) {
     }
 }
 
-void ApplyToArea(uintptr_t Area, int32_t Map, const char* When) {
+// An area that has just loaded is put in the host's shape once; after that this walk only watches.
+void WalkArea(uintptr_t Area, int32_t Map) {
+    Watch& W = g_watch[Map];
+    const bool First = W.Area != Area;
+    if (First) {
+        W.Area = Area;
+        W.Seen.clear();
+        W.Mine.clear();
+    }
     std::vector<Network::MapObjectState> Host;
-    {
+    if (First) {
         std::lock_guard<std::mutex> Lock(g_cacheMutex);
         const auto It = g_hostStates.find(Map);
-        if (It == g_hostStates.end() || It->second.empty()) return;
-        Host = It->second;
+        if (It != g_hostStates.end()) Host = It->second;
     }
     GuestStats S{};
-    ApplyAreaSafe(Area, Host.data(), static_cast<uint32_t>(Host.size()), &S);
+    WalkAreaSafe(Area, Host.empty() ? nullptr : Host.data(), static_cast<uint32_t>(Host.size()), &W, &S);
+    if (First && Host.empty()) W.Area = 0;   // nothing from the host yet: try again on the next pass
     if (S.Threw) {
         LOG_ERROR("[MAPOBJ] map %u: putting the host's objects where it has them threw (%u done before)",
                   MapNumber(Map), S.Set);
         return;
     }
-    if (S.Set) {
-        LOG_INFO("[MAPOBJ] map %u %s: %u object(s) put where the host has them (%u of its %zu found here)",
-                 MapNumber(Map), When, S.Set, S.Seen, Host.size());
+    if (S.Set || S.Mine || S.Moving) {
+        LOG_INFO("[MAPOBJ] map %u as it loads: %u object(s) put where the host has them (%u seen, %u left as "
+                 "I have them, %u still moving)", MapNumber(Map), S.Set, S.Seen, S.Mine, S.Moving);
     }
 }
 
 void GuestPass(ULONGLONG Now) {
     static ULONGLONG s_at = 0;
-    const bool Fresh = g_cacheNew.exchange(false);
-    if (!Fresh && Now - s_at < kGuestPassMs) return;
+    // A snapshot that has just arrived is worth a pass at once: an area that loaded before the host's
+    // states came in is waiting for exactly this.
+    if (!g_cacheNew.exchange(false) && Now - s_at < kGuestPassMs) return;
     s_at = Now;
     const uintptr_t MapMgr = MapManager();
     if (!MapMgr) return;
     const int Count = AreaCountSafe(MapMgr);
+    std::map<int32_t, bool> Here;
     for (int32_t A = 0; A < Count && A < 128; ++A) {
         uintptr_t Area = 0;
         int32_t Map = 0;
-        if (AreaMapSafe(MapMgr, A, &Area, &Map)) ApplyToArea(Area, Map, "(update)");
+        if (!AreaMapSafe(MapMgr, A, &Area, &Map)) continue;
+        Here[Map] = true;
+        WalkArea(Area, Map);
+    }
+    for (auto It = g_watch.begin(); It != g_watch.end();) {
+        It = Here.count(It->first) ? std::next(It) : g_watch.erase(It);
     }
 }
 
@@ -446,6 +502,7 @@ void Forget(const char* Why) {
         Maps = g_hostStates.size();
         g_hostStates.clear();
     }
+    g_watch.clear();
     if (Maps) LOG_INFO("[MAPOBJ] the host's object states of %zu maps forgotten: %s", Maps, Why);
 }
 
@@ -456,6 +513,15 @@ void SetMapObjectStates(bool On) {
     LOG_INFO("[MAPOBJ] the map's objects as the host has them: %s", On
              ? "in every map a guest loads (gates, bridges, lifts, statues)"
              : "only from the join (the game's way)");
+}
+
+// A rest puts every map object back where its map starts (the game's own world reset), so the host's
+// shape has to go in again -- and what this player had done to an object is gone with the reset as well.
+void MapObjectsAfterRest(const char* Why) {
+    if (g_watch.empty()) return;
+    LOG_INFO("[MAPOBJ] the objects of %zu map(s) go back to the host's shape on the next pass: %s",
+             g_watch.size(), Why);
+    g_watch.clear();
 }
 
 void MapObjectsTick() {

@@ -76,9 +76,12 @@
 #include "../../include/hooks.h"
 #include "../../include/network.h"
 #include "../../include/session.h"
+#include "../../include/ui.h"
+#include "../../include/ui_settings.h"
 #include "../../include/utils.h"
 
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -540,6 +543,32 @@ bool PartnerPacketForAnotherMap() {
     return g_partnerMap.load(std::memory_order_relaxed) != MyMap;
 }
 
+// Nobody has joined anybody: two games in a lobby, each in its own world. The game still sends its
+// event packets to everyone in the session, and both players standing in the same map -- Things Betwixt
+// with a new character each -- is enough for them to land. That is the black screen of 21.09 morning
+// (checklist 10): the two made their characters together, the first skipped the crones' scene, its
+// event task told the other's the scene was over, and the second was left looking at the black the
+// scene fades out of. While no join is going on at all, the partner's scripts have nothing to say here;
+// a join of any kind, in any state, lets them through again (the join itself is built of them).
+bool NobodyHasJoined() {
+    if (!Session::SessionManager::GetInstance().IsActive()) return false;
+    uintptr_t Root = 0, Mp = 0, Ctrl = 0, Vtbl = 0;
+    if (!ReadPtr(ExeBase() + kNetRoot, &Root) || !ReadPtr(Root + 0x18, &Mp)) return false;
+    if (ReadPtr(Mp + 0x40, &Ctrl) && ReadPtr(Ctrl, &Vtbl) && Vtbl == ExeBase() + kJoinCtrlVtable) {
+        return false;   // this game is going into someone's world, or already in it
+    }
+    __try {
+        uintptr_t It = *reinterpret_cast<const uintptr_t*>(Mp + 0x48);
+        const uintptr_t End = *reinterpret_cast<const uintptr_t*>(Mp + 0x50);
+        for (int Guard = 0; It && It < End && Guard < 16; It += 8, ++Guard) {
+            if (*reinterpret_cast<const uintptr_t*>(It)) return false;   // someone is coming into mine
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return true;
+}
+
 // Probe (19.09, the host's black screen after making its character): which event task a packet
 // 'E'/'F'/'G' moves. The packet names the task by its index in the area of the map exe+0x2C6DE0
 // names (byte 0, [task+0x2C]); the receiver finds the area as exe+0x18A500 does --
@@ -620,6 +649,15 @@ void NoteEventPacket(char Type, const uint8_t* Data, uint32_t Size, bool Dropped
 }
 
 void __fastcall EventPacketsDetour(void* Listener, char Type, uint8_t* Data, uint32_t Size) {
+    if (NobodyHasJoined()) {
+        static std::atomic<uint32_t> s_told{ 0 };
+        const uint32_t N = s_told.fetch_add(1) + 1;
+        if (N <= 5 || N % 500 == 0) {
+            LOG_INFO("[EVENTNET] '%c' from the partner while neither of us is in the other's world -- dropped "
+                     "(%u so far)", Type, N);
+        }
+        return;
+    }
     if (PartnerPacketForAnotherMap()) {
         g_mapPacketsDropped.fetch_add(1, std::memory_order_relaxed);
         if (Type == 'F' || Type == 'G') NoteEventPacket(Type, Data, Size, true);
@@ -630,6 +668,7 @@ void __fastcall EventPacketsDetour(void* Listener, char Type, uint8_t* Data, uin
 }
 
 void __fastcall GenPacketsDetour(void* Listener, char Type, uint8_t* Data, uint32_t Size) {
+    if (NobodyHasJoined()) return;
     if (PartnerPacketForAnotherMap()) {
         g_mapPacketsDropped.fetch_add(1, std::memory_order_relaxed);
         return;
@@ -1005,7 +1044,104 @@ void PoseFixTick() {
     LOG_INFO("[POSE] the partner's copy was still in the bonfire travel pose %llu s after its travel -- put back "
              "to standing", static_cast<unsigned long long>((Now - At) / 1000));
 }
+
+// A pose this player cannot leave (21.09 morning, report 7: "I levelled up and then just stayed on my
+// knees"). Kneeling for a level-up is an action an NPC's script puts the character into and takes it
+// out of again at the end. A guest does that in the host's world, where the game never meant a phantom
+// to level up at all; when the other half of the script does not come, the character stays in the
+// action -- the same shape as the partner's copy stuck in the travel pose above, and the same way out:
+// the action controller's kind (+0xF0) back to 0.
+//
+// It fires for this player's own character only, only while a lobby is up (a host levelling up with a
+// guest in its world is the same script from the other side), and only while the very same non-zero
+// kind has been on for kStuckPoseMs with the character standing in one spot the whole time, on its
+// feet, with no talk open and no bonfire touched for a minute (both hold a character on purpose).
+// Anything that long with nothing moving is stuck; the log names the kind, so an honest one can be
+// spared later.
+constexpr ULONGLONG kStuckPoseMs = 12000;
+constexpr ULONGLONG kRestQuietMs = 60000;
+constexpr float     kStuckSpot   = 0.35f;     // metres it may drift and still count as standing still
+
+std::atomic<ULONGLONG> g_localRestAt{ 0 };
+
+// A talk is open: [[[GMImp+0x70]+0x48]+0x40] (docs §3.14). A talk holds the character on purpose --
+// and the level-up menu is one -- so nothing is cut short while it is up.
+bool TalkOpenSafe() {
+    uintptr_t Gm = 0, Ev = 0, Talk = 0, Open = 0;
+    if (!ReadPtr(ExeBase() + kGameManagerImp, &Gm) || !ReadPtr(Gm + 0x70, &Ev) || !ReadPtr(Ev + 0x48, &Talk)) {
+        return false;
+    }
+    return ReadPtr(Talk + 0x40, &Open);
+}
+
+bool LocalHpSafe(uintptr_t Chr, int32_t* Hp) {
+    __try {
+        *Hp = *reinterpret_cast<const int32_t*>(Chr + 0x168);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool ClearPoseSafe(uintptr_t Chr) {
+    __try {
+        const uintptr_t Action = *reinterpret_cast<const uintptr_t*>(Chr + 0xC8);
+        if (!Action) return false;
+        *reinterpret_cast<int32_t*>(Action + 0xF0) = 0;
+        *reinterpret_cast<uint32_t*>(Action + 0xFC) &= ~0x4000000u;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+void StuckPoseTick() {
+    static int32_t   s_kind = 0;
+    static ULONGLONG s_since = 0;
+    static float     s_at[3] = {};
+    static bool      s_told = false;
+    uintptr_t Gm = 0, Local = 0;
+    if (!g_poseFix.load() || !Session::SessionManager::GetInstance().IsActive() ||
+        !ReadPtr(ExeBase() + kGameManagerImp, &Gm) || !ReadPtr(Gm + 0xD0, &Local)) {
+        s_kind = 0;
+        return;
+    }
+    const PoseNumbers Mine = ReadPoseSafe(Local);
+    const ULONGLONG Now = GetTickCount64();
+    float X = 0, Y = 0, Z = 0, Rot = 0;
+    int32_t Hp = 0;
+    if (!Mine.Ok || !Mine.Kind || Now - g_localRestAt.load() < kRestQuietMs || TalkOpenSafe() ||
+        !GetLocalPlayerPosition(X, Y, Z, Rot) || !LocalHpSafe(Local, &Hp) || Hp <= 0) {
+        s_kind = 0;
+        return;
+    }
+    const bool Moved = fabsf(X - s_at[0]) > kStuckSpot || fabsf(Y - s_at[1]) > kStuckSpot ||
+                       fabsf(Z - s_at[2]) > kStuckSpot;
+    if (Mine.Kind != s_kind || Moved) {
+        s_kind = Mine.Kind;
+        s_since = Now;
+        s_told = false;
+        s_at[0] = X;
+        s_at[1] = Y;
+        s_at[2] = Z;
+        return;
+    }
+    if (s_told || Now - s_since < kStuckPoseMs) return;
+    s_told = true;
+    if (!ClearPoseSafe(Local)) return;
+    WatchPoses();
+    LOG_INFO("[POSE] I have stood in action kind %d (flags 0x%08X) for %llu s without moving -- put back to "
+             "standing", Mine.Kind, Mine.Flags,
+             static_cast<unsigned long long>((Now - s_since) / 1000));
+    UI::Overlay::GetInstance().ShowNotification(
+        UI::Tr("You were stuck in a pose -- back on your feet", "Ты застрял в позе — мод поднял тебя"), 4.0f,
+        UI::NotifyKind::Info);
+}
 } // namespace
+
+void NoteLocalRestForPose() {
+    g_localRestAt.store(GetTickCount64());
+}
 
 void WatchPoses() {
     g_poseWatchUntil.store(GetTickCount64() + kPoseWatchMs);
@@ -1022,6 +1158,7 @@ void SetTravelPoseFix(bool On) {
 
 void PoseProbeTick() {
     PoseFixTick();
+    StuckPoseTick();
     const ULONGLONG Now = GetTickCount64();
     if (Now > g_poseWatchUntil.load()) return;
     static ULONGLONG s_at = 0;

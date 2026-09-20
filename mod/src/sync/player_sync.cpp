@@ -340,7 +340,7 @@ void TellAboutPvpBonfire() {
     s_last.store(Now);
     DS2Coop::UI::Overlay::GetInstance().ShowNotification(
         DS2Coop::UI::Tr("A bonfire takes nobody while you are set to fight each other -- turn PvP off in the menu.",
-                        "К костру не сесть, пока стоит режим PvP â выключи его в меню мода."),
+                        "К костру не сесть, пока стоит режим PvP — выключи его в меню мода."),
         6.0f, DS2Coop::UI::NotifyKind::Warning);
     LOG_INFO("[PVP] the bonfire said no while the damage mode is PvP -- told the player to turn it off");
 }
@@ -352,7 +352,12 @@ uint64_t __fastcall ProbeDetour(void* a1, void* a2, void* a3, void* a4) {
     auto Fn = reinterpret_cast<uint64_t(__fastcall*)(void*, void*, void*, void*)>(g_probes[N].Original);
     const uint64_t Result = Fn(a1, a2, a3, a4);
     LogProbe(N, Caller, Result, a1, a2);
-    if (g_probes[N].Rva == 0x1CB950 && (Result & 0xFF) == 0) TellAboutPvpBonfire();
+    if (g_probes[N].Rva == 0x1CB950) {
+        // A bonfire holds the character on purpose, and its menus can stand open for minutes: the
+        // stuck-pose watchdog (travel_sync.cpp) keeps away from one for a while after it is touched.
+        NoteLocalRestForPose();
+        if ((Result & 0xFF) == 0) TellAboutPvpBonfire();
+    }
     return Result;
 }
 
@@ -510,10 +515,16 @@ uint64_t __fastcall MpActiveHook(void* Session) {
         }
         return 0;
     }
-    if (g_guestDropsLocal.load() && Caller == kDropLotReturn && IsGuestInHostWorld()) {
+    // ...and for this player's own kills while a lobby is up at all. On 21.09 morning a snake the host
+    // killed itself left nothing behind ("where did the downgrade come from?"), and the overkilled lot
+    // with no fallback is exactly what that looks like. A game this predicate already answers "no" for
+    // is not changed by answering no here, so both sides can take the enemy's normal lot.
+    if (g_guestDropsLocal.load() && Caller == kDropLotReturn &&
+        (IsGuestInHostWorld() || DS2Coop::Session::SessionManager::GetInstance().IsActive())) {
         const uint32_t Count = g_guestDropLots.fetch_add(1) + 1;
         if (Count <= 5 || Count % 200 == 0) {
-            LOG_INFO("[LOOT] an enemy's drop rolled here as a guest, from its normal lot (%u so far)", Count);
+            LOG_INFO("[LOOT] an enemy's drop rolled here from its normal lot, not the multiplayer one (%u so far)",
+                     Count);
         }
         return 0;
     }
@@ -743,6 +754,16 @@ bool                                     g_carryHomePending = false;
 // Flags of this player's own that the partner is not told about (KeepFlagLocal).
 std::mutex                                   g_localFlagsMutex;
 std::vector<std::pair<uint32_t, bool>>       g_localFlags;
+
+// ...and the same flags kept for the whole run, to put back on every arrival in the host's world
+// (21.09 morning, checklist 4: "go into my friend's world again and I have to skip my own lines a
+// second time"). While a guest is in the host's world its flag table is the host's copy, so a talk
+// finished there is written in that copy; flags_carry_home brings it to this player's own table when
+// it goes home, and the next arrival starts from the host's copy again, which has none of it. Only
+// the ones this player's own talk scripts wrote, only those that are set, and always folded back into
+// the diff baseline so the partner is not told: its own NPCs are its own (§3.44).
+std::mutex               g_myTalkMutex;
+std::map<uint32_t, bool> g_myTalkFlags;
 
 // Fold a value into the baseline so the next diff does not report it as ours.
 void AbsorbIntoBaseline(uint32_t Id, bool Value) {
@@ -1698,6 +1719,27 @@ const GateSite Sites[] = {
     // it does in a solo game; the refusal message is still shown only to the local player, and the
     // door's own flag goes to the partner the way it always did (npc_progress.cpp, DoorUnlock).
     { "door key: whose inventory",       0x1CCE7A, { 0x75, 0x03 }, { 0x90, 0x90 } },
+    // *** What a guest opens in the host's world is gone from its own world. ***
+    //
+    // "The key is mine, I open the door in the host's world and the host sees it open -- and in my own
+    // world it is shut again, and opens without the key being used a second time" (21.09 morning,
+    // checklist 3), and the same for a shortcut opened over there (checklist 16). The flag is written;
+    // the door itself is not, because a guest's game writes down no map object at all:
+    //
+    //   exe+0x1F2EA0  the states of the maps this game holds -> the save's compact records
+    //   exe+0x1F2EDA  MOV  RCX,[GMImp+0x22F0]    ; the session
+    //   exe+0x1F2EE6  CALL exe+0x5135F0          ; is this game a session's client?
+    //   exe+0x1F2EEB  TEST AL,AL
+    //   exe+0x1F2EED  0F 85 ...  JNZ +0x1F2F84   ; yes -> nothing is written down
+    //
+    // exe+0x5135F0 is the same "am I a guest" the game asks before it holds a map object's state
+    // change (map_state_act.cpp) and before it hands out a boss's reward item -- a guest's world is
+    // meant to leave no trace. In seamless co-op both players play their own world all the way
+    // through, and what this player opened there it opened for itself as well. The TEST is turned into
+    // XOR AL,AL: the answer is dropped, the jump is never taken, and the records are written as they
+    // are in a solo game. Only this one test changes; exe+0x5135F0 has dozens of callers and keeps its
+    // answer everywhere else.
+    { "map objects: a guest writes none",  0x1F2EEB, { 0x84, 0xC0 }, { 0x30, 0xC0 } },
     { "byte [RAX+0x1A] test",            0x3F2536, { 0x74, 0xF6 }, { 0x90, 0x90 } },
     { "helper result test",              0x3F2557, { 0x75, 0xD5 }, { 0x90, 0x90 } },
 };
@@ -3175,8 +3217,38 @@ void RegionCompareStep() {
 // every write the game accepts notifies the world's listeners -- and taking that lock here could be
 // taking it twice on one thread.
 void KeepFlagLocal(uint32_t Id, bool Value) {
-    std::lock_guard<std::mutex> Lock(g_localFlagsMutex);
-    if (g_localFlags.size() < 512) g_localFlags.emplace_back(Id, Value);
+    {
+        std::lock_guard<std::mutex> Lock(g_localFlagsMutex);
+        if (g_localFlags.size() < 512) g_localFlags.emplace_back(Id, Value);
+    }
+    std::lock_guard<std::mutex> Mine(g_myTalkMutex);
+    if (g_myTalkFlags.size() < 4096 || g_myTalkFlags.count(Id)) g_myTalkFlags[Id] = Value;
+}
+
+// The talk progress of this player's own, put back into the table it is standing in.
+void PutMyTalkFlagsBack(const char* When) {
+    std::map<uint32_t, bool> Mine;
+    {
+        std::lock_guard<std::mutex> Lock(g_myTalkMutex);
+        Mine = g_myTalkFlags;
+    }
+    if (Mine.empty() || !GetFlagManager()) return;
+    int Set = 0;
+    for (const auto& Pair : Mine) {
+        if (!Pair.second || ReadFlag(Pair.first)) continue;
+        if (!WriteFlagQuiet(Pair.first, true)) continue;
+        ++Set;
+        std::lock_guard<std::mutex> Lock(g_localFlagsMutex);
+        if (g_localFlags.size() < 512) g_localFlags.emplace_back(Pair.first, true);
+    }
+    if (Set) {
+        LOG_INFO("[FLAGSYNC] %d flag(s) of my own talks put back (%s) -- the partner is not told about them",
+                 Set, When);
+    }
+}
+
+void ReapplyMyTalkFlagsOnArrival() {
+    PutMyTalkFlagsBack("in the partner's world");
 }
 
 // Apply a flag that arrived from another player.

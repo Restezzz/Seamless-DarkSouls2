@@ -64,7 +64,11 @@ constexpr uint32_t  kDeathTiming    = 0x16DA90;   // (death animation) -> timing
 constexpr uint32_t  kNetRoot        = 0x1616CF8;
 constexpr uint32_t  kJoinCtrlVtable = 0x10D7BD8;
 constexpr ULONGLONG kRollDelayMs    = 1500;
-constexpr ULONGLONG kRolledMemoryMs = 60000;
+// Long enough for the three paths that can roll one death to race each other (the receiver, the
+// queue five seconds later, and this player's own death handler), and no longer: the same enemy
+// standing again after a rest and killed a second time is a new kill and rolls again (21.09
+// morning, report 4: "killed the snake and nothing dropped, and I had not killed it at home").
+constexpr ULONGLONG kRolledMemoryMs = 20000;
 constexpr int       kQueueSize      = 32;
 constexpr int       kRolledSize     = 64;
 constexpr ULONGLONG kStuckCheckMs   = 5000;

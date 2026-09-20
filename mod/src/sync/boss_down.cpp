@@ -58,12 +58,18 @@ constexpr uint32_t kDeadForEvents  = 0x248890;   // () -> the local character is
 constexpr uint32_t kDeadForBoss    = 0x248940;   // () -> the same, for the boss update
 constexpr uint32_t kEventsReturn   = 0x1959EF;   // exe+0x1959C0: the event area update
 constexpr uint32_t kBossReturn     = 0x1814DF;   // exe+0x181490: the boss update
+constexpr uint32_t kGiveSouls      = 0x202610;   // (PlayerCtrl, souls) -> souls added
+constexpr uintptr_t kChrOfCtrl     = 0xB8;       // PlayerCtrl -> the character's own block
+constexpr uintptr_t kChrFlags      = 0x4C8;      // that block's flags
+constexpr uint32_t kNoSoulsBit     = 1u << 14;   // set while the souls are refused
 constexpr int32_t  kJoinInWorld    = 7;
 
-using GateFn = uint64_t(__fastcall*)();
+using GateFn  = uint64_t(__fastcall*)();
+using SoulsFn = uint64_t(__fastcall*)(uintptr_t, int32_t);
 
-GateFn g_deadForEvents = nullptr;
-GateFn g_deadForBoss   = nullptr;
+GateFn  g_deadForEvents = nullptr;
+GateFn  g_deadForBoss   = nullptr;
+SoulsFn g_giveSouls     = nullptr;
 
 std::atomic<bool>     g_enabled{ true };     // ini boss_while_down
 std::atomic<uint32_t> g_eventPasses{ 0 };
@@ -203,6 +209,58 @@ uint64_t __fastcall DeadForEventsDetour() {
     return Stock & ~static_cast<uint64_t>(0xFF);
 }
 
+// The souls of a boss killed while this player was down (21.09 morning, checklist 13 and 18: "the host
+// lies dead, the guest finishes the boss -- the host gets the items but not the souls", and the same
+// for a guest who fell and whose partner finished it).
+//
+// With the two gates above open, the fight's phase 3 does run for a player who is down: the reward item
+// (exe+0x181850) arrives, which is exactly what both reports say. The souls do not, and they stop one
+// step further in: exe+0x181950 hands them to exe+0x202380 -> exe+0x202610, which refuses at once when
+// bit 14 of the character's flags ([[PlayerCtrl+0xB8]+0x4C8]) is set -- and it is set while the
+// character is down. Nothing else in that function can refuse a boss's reward: the player exists and the
+// amount is the row's.
+//
+// So the refusal is answered instead of guessed at: the call runs as it always does, and only when it
+// says no, this player is down and a session is up is the bit lifted for the second call and put back
+// after it. A call that was refused for any other reason is refused the second time too.
+uint64_t __fastcall GiveSoulsDetour(uintptr_t Ctrl, int32_t Souls) {
+    const uint64_t Given = g_giveSouls(Ctrl, Souls);
+    if ((Given & 0xFF) || !Souls || !g_enabled.load()) return Given;
+    if (!Session::SessionManager::GetInstance().IsActive() || !LocalDown()) return Given;
+    uintptr_t Gm = 0, Player = 0;
+    if (!ReadPtr(ExeBase() + kGameManagerImp, &Gm) || !ReadPtr(Gm + 0xD0, &Player) || Player != Ctrl) {
+        return Given;   // somebody else's souls: only this player's own refusal is answered
+    }
+
+    uintptr_t Chr = 0;
+    uint32_t Flags = 0;
+    __try {
+        Chr = *reinterpret_cast<const uintptr_t*>(Ctrl + kChrOfCtrl);
+        if (!Chr) return Given;
+        Flags = *reinterpret_cast<const uint32_t*>(Chr + kChrFlags);
+        if (!(Flags & kNoSoulsBit)) return Given;
+        *reinterpret_cast<uint32_t*>(Chr + kChrFlags) = Flags & ~kNoSoulsBit;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return Given;
+    }
+    const uint64_t Again = g_giveSouls(Ctrl, Souls);
+    bool Back = false;
+    __try {
+        *reinterpret_cast<uint32_t*>(Chr + kChrFlags) =
+            *reinterpret_cast<const uint32_t*>(Chr + kChrFlags) | (Flags & kNoSoulsBit);
+        Back = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    if (!Back) {
+        LOG_WARNING("[BOSS] the \"no souls while down\" bit could not be put back on this character -- souls "
+                    "will not be refused here again until the game writes those flags itself");
+    }
+    LOG_INFO("[BOSS] %d souls were refused because I am down -- %s", Souls,
+             (Again & 0xFF) ? "given anyway (the reward of a fight that ended over my body)"
+                            : "still refused, so it was not about being down");
+    return Again;
+}
+
 uint64_t __fastcall DeadForBossDetour() {
     const uint64_t Stock = g_deadForBoss();
     if (!(Stock & 0xFF)) return Stock;
@@ -234,11 +292,16 @@ bool InstallBossDown(bool Enabled) {
         const bool Boss = Hooks.InstallHook(reinterpret_cast<void*>(ExeBase() + kDeadForBoss),
                                             reinterpret_cast<void*>(&DeadForBossDetour),
                                             reinterpret_cast<void**>(&g_deadForBoss));
+        const bool Souls = Hooks.InstallHook(reinterpret_cast<void*>(ExeBase() + kGiveSouls),
+                                            reinterpret_cast<void*>(&GiveSoulsDetour),
+                                            reinterpret_cast<void**>(&g_giveSouls));
         if (!Events) g_deadForEvents = nullptr;
         if (!Boss) g_deadForBoss = nullptr;
+        if (!Souls) g_giveSouls = nullptr;
         LOG_INFO("[BOSS] a fight that ends while a player is down: event scripts exe+0x%X %s, the fight's own "
-                 "phases exe+0x%X %s", kDeadForEvents, Events ? "hooked" : "NOT hooked", kDeadForBoss,
-                 Boss ? "hooked" : "NOT hooked");
+                 "phases exe+0x%X %s, its souls exe+0x%X %s", kDeadForEvents, Events ? "hooked" : "NOT hooked",
+                 kDeadForBoss, Boss ? "hooked" : "NOT hooked", kGiveSouls,
+                 Souls ? "given to a player who is down as well" : "NOT hooked");
     }
     LOG_INFO("[BOSS] the boss fight carries on while a player is down: %s", Enabled ? "on" : "off");
     return g_deadForEvents != nullptr && g_deadForBoss != nullptr;
