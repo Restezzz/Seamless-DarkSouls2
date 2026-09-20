@@ -49,6 +49,7 @@
 #include <cstdint>
 #include <cstring>
 #include <map>
+#include <set>
 #include <mutex>
 #include <vector>
 
@@ -103,6 +104,21 @@ std::atomic<uint32_t>                    g_killsHeard{ 0 };
 
 // Host: what went out to the guest now in the world (game thread only).
 std::map<int32_t, uint32_t> g_sentDead;
+
+// The host's kept maps after a rest (21.09 morning, checklist 9 -- found in the guest's own log).
+//
+// A rest stands every enemy up, but the records the game keeps for the three maps this player has
+// LEFT ([[GMImp+0x38]+0x200]) are not touched by it: they still say "these eight are dead". The rest
+// also makes the host send everything again (g_sentDead is cleared), so about a minute after a rest
+// the guest was handed that same stale list once more -- and its eight enemies, standing up from the
+// very same rest, died again where they stood: at 08:45:10 the guest rested, at 08:45:13 and 08:45:28
+// the list of 8 was dropped as older than the rest, and at 08:46:06 the copy that came after the quiet
+// window was taken and applied.
+//
+// So a kept map is not handed over again until this game has loaded it once more, which is the only
+// moment the game itself makes those records honest.
+std::set<int32_t> g_leftFresh;          // kept maps loaded here since the last reset
+bool              g_leftStale = false;  // ...and whether the rest has made the others suspect
 std::map<int32_t, uint32_t> g_sentKills;
 
 struct DeadList {
@@ -339,7 +355,9 @@ void CollectHostDead(std::vector<DeadList>* Lists) {
         uintptr_t Block = 0;
         if (!ReadPtr(GenMgr + 0x20 + static_cast<uintptr_t>(Slot) * 8, &Block)) continue;
         DeadList L{};
-        if (CollectBlockSafe(Block, &L)) Lists->push_back(L);
+        if (!CollectBlockSafe(Block, &L)) continue;
+        g_leftFresh.insert(L.Map);   // loaded here now: its kept record will be honest again
+        Lists->push_back(L);
     }
     const uintptr_t MapMgr = MapManager();
     uintptr_t Cache = 0;
@@ -357,7 +375,16 @@ void CollectHostDead(std::vector<DeadList>* Lists) {
         if (Got != 0) continue;
         const bool Loaded = std::any_of(Lists->begin(), Lists->end(),
                                         [&](const DeadList& Have) { return Have.Map == L.Map && Have.Source == 0; });
-        if (!Loaded) Lists->push_back(L);
+        if (Loaded) continue;
+        if (g_leftStale && !g_leftFresh.count(L.Map)) {
+            static std::atomic<uint32_t> s_told{ 0 };
+            if (s_told.fetch_add(1) < 10) {
+                LOG_INFO("[ENEMIES] map %u is one I have left, and its kept records are older than the last rest "
+                         "-- not handed over until I load it again", MapNumber(L.Map));
+            }
+            continue;
+        }
+        Lists->push_back(L);
     }
 }
 
@@ -763,6 +790,8 @@ void ForgetHostEnemyStatesAfterRest(const char* Why) {
 
 void ForgetHostEnemyStates(const char* Why) {
     g_sentDead.clear();   // the host: a rest changed the lists, everything goes out again
+    g_leftStale = true;   // ...except for the maps it has left, whose records the rest does not touch
+    g_leftFresh.clear();
     size_t Maps = 0;
     {
         std::lock_guard<std::mutex> Lock(g_cacheMutex);
