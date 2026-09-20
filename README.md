@@ -7,11 +7,20 @@ A pathetic attempt at LukeYui imitation
 Бесшовный кооператив для Dark Souls 2</h3>
 
 <p align="center">
-version <b>0.3.0</b> ·
-<a href="https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest"><b>Download / Скачать</b></a> ·
+<b>The project is frozen · Проект заморожен</b><br>
 <a href="https://restezzz.github.io/Seamless-DarkSouls2/">Website / Сайт</a><br>
 English on the left · Русский справа
 </p>
+
+> **The project is frozen.** On 22 September LukeYui released Seamless Co-op for Dark Souls II — the real
+> one, from the author of the Elden Ring and Dark Souls III mods. Everything this mod was reaching for is
+> there and done properly, so there is no sense in carrying it further. The downloads are closed; the
+> source and the notes stay here for anyone who wants to read them.
+>
+> **Проект заморожен.** 22 сентября вышел Seamless Co-op для Dark Souls II от LukeYui — тот самый, от
+> автора модов для Elden Ring и Dark Souls III. Всё, к чему шёл этот мод, там уже есть и сделано как надо,
+> так что продолжать смысла нет. Загрузки закрыты; исходники и записи остаются здесь для тех, кому
+> интересно.
 
 <table>
 <tr>
@@ -156,14 +165,11 @@ It is an early version, played by two people so far. See **Known issues** below.
 
 ## Download
 
-Open the **[latest release](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
-and take one archive:
+**Closed.** The project is frozen — play LukeYui's Seamless Co-op for Dark Souls II instead. The source
+and the build instructions are still here; the steps below are kept for the record.
 
-- **the host** (the player friends join): `Seamless-DS2-0.3.0-host.zip`
-- **friends**: `Seamless-DS2-0.3.0-joiner.zip`
-
-Older versions are on the [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases)
-page. Updating: extract the new archive over the old files.
+The release archives are closed. Anyone who still wants to try it can build the DLL from this source
+(`scripts/package.ps1` makes both archives).
 
 </td>
 <td valign="top">
@@ -178,14 +184,11 @@ page. Updating: extract the new archive over the old files.
 
 ## Скачать
 
-Открой **[последний релиз](https://github.com/Restezzz/Seamless-DarkSouls2/releases/latest)**
-и возьми один архив:
+**Закрыто.** Проект заморожен — играйте в Seamless Co-op для Dark Souls II от LukeYui. Исходники и
+сборка остаются здесь; шаги ниже сохранены как есть.
 
-- **хосту** (к нему подключаются друзья): `Seamless-DS2-0.3.0-host.zip`
-- **друзьям**: `Seamless-DS2-0.3.0-joiner.zip`
-
-Прошлые версии — на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases).
-Обновление: распаковать новый архив поверх старых файлов.
+Архивы релизов закрыты. Кому всё же интересно — DLL собирается из этих исходников
+(`scripts/package.ps1` делает оба архива).
 
 </td>
 </tr>
