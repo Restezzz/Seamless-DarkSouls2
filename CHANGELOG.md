@@ -6,13 +6,18 @@ archives: `Seamless-DS2-<version>-host.zip` for the host and `Seamless-DS2-<vers
 Каждая версия лежит на странице [Releases](https://github.com/Restezzz/Seamless-DarkSouls2/releases) двумя
 архивами: `Seamless-DS2-<версия>-host.zip` для хоста и `Seamless-DS2-<версия>-joiner.zip` для друзей.
 
-## 0.3.0 — not released yet / ещё не выпущено
+## 0.3.0 — 2026-09-20
 
-Everything 0.2.2 was going to be and the tests of 18-21.09 on top of it: the number was skipped on the user's word,
-"we go straight to 0.3.0". Part of it was checked in play on 18.09 (below); this section is rewritten from the final
-test's results before the release.
-Всё, что должно было стать 0.2.2, и тесты 18–21.09 сверху: номер пропущен по решению автора — «идём сразу на 0.3.0».
-Часть проверена в игре 18.09 (ниже); перед релизом раздел переписывается по итогам финального теста.
+Everything 0.2.2 was going to be and four two-player tests on top of it (18, 19 and 21.09); the number 0.2.2 was
+skipped on the user's word, "we go straight to 0.3.0". The headline: a new game can be started together from the
+very first minute, before either character exists. What the testers confirmed in play and what is still broken are
+both in the [0.3.0 release notes](https://github.com/Restezzz/Seamless-DarkSouls2/releases/tag/v0.3.0).
+**Both players need 0.3.0** — there are new packets between the games.
+Всё, что должно было стать 0.2.2, и четыре теста вдвоём сверху (18, 19 и 21.09); номер 0.2.2 пропущен по решению
+автора — «идём сразу на 0.3.0». Главное: новую игру можно начать вместе с самой первой минуты, ещё до создания
+персонажей. Что подтверждено в игре и что ещё сломано — в
+[описании релиза 0.3.0](https://github.com/Restezzz/Seamless-DarkSouls2/releases/tag/v0.3.0).
+**0.3.0 нужна обоим** — между играми появились новые пакеты.
 
 **Checked in play on 18.09 / Проверено в игре 18.09**
 
@@ -133,8 +138,16 @@ test's results before the release.
   событий напарника не трогают чужую игру, и скип сцены у старушек не оставляет второго с чёрным экраном.
   Уведомление про PvP у костра снова читается.
 
-Both players need 0.3.0: seven new packets between the players.
-Нужна 0.3.0 у обоих: семь новых пакетов между игроками.
+**Checked in play in the final test / Проверено в игре в финальном тесте**
+
+- The lever gate, doors with their animation, the lift and its button, a broken chest staying broken, the map's
+  objects as the host has them, full health on arrival, getting up after levelling up, the souls of a boss killed
+  over the host's body, an enemy killed again after a rest dropping again, the PvP notice at a bonfire, enemies the
+  host killed elsewhere being dead, and a guest's dialogue lines staying skipped after a rejoin.
+  Ворота с рычагами, двери с анимацией, лифт и его кнопка, разбитый сундук, объекты карты как у хоста, полные хп при
+  входе, подъём с колен после прокачки, души с босса, добитого над телом хоста, дроп с моба, убитого повторно после
+  отдыха, уведомление про PvP у костра, мёртвые мобы, убитые хостом в другой локации, и проскипанные реплики,
+  которые не приходится скипать заново после перезахода.
 
 ## 0.2.1 — 2026-09-17
 
